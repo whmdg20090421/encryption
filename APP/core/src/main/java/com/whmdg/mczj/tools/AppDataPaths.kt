@@ -134,6 +134,25 @@ object AppDataPaths {
         return dir
     }
 
+    // ── 用户外部存储目录（`{用户存储}/艨艟战舰/...`，可见、可控、卸载后可能保留） ──
+
+    /** 外部用户存储下的应用根目录名。 */
+    private const val EXTERNAL_DIR_NAME = "艨艟战舰"
+
+    /** 外部用户存储下的应用根目录：`{用户存储}/艨艟战舰/` */
+    fun externalRoot(context: Context): File {
+        val dir = File(Environment.getExternalStorageDirectory(), EXTERNAL_DIR_NAME)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 安装包提取目录：`{用户存储}/艨艟战舰/apk/` */
+    fun extractedApks(context: Context): File {
+        val dir = File(externalRoot(context), "apk")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     // ── 下载器模块 ──
 
     /** 下载器根目录 */

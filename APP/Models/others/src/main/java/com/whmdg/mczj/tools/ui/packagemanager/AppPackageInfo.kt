@@ -37,6 +37,8 @@ data class AppPackageDetail(
     val internalDataDir: String,
     val externalDataDir: String,
     val apkPath: String,
+    /** 分包 APK 路径（不含 base）。为空表示单 APK 应用。 */
+    val splitApkPaths: List<String>,
     val uid: Int
 )
 
@@ -111,6 +113,7 @@ object AppPackageInfoProvider {
             internalDataDir = appInfo.dataDir ?: "",
             externalDataDir = externalDataDir,
             apkPath = apkPath,
+            splitApkPaths = appInfo.splitSourceDirs?.filter { it != apkPath } ?: emptyList(),
             uid = appInfo.uid
         )
     }

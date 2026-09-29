@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
@@ -3174,6 +3175,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
 
+    /** 从 .apks 内临时解出的 base.apk 路径；APK 信息弹窗关闭时删除，普通 .apk 为 null。 */
+    private var apkInfoTempPath: String? = null
+
+    /** .apks 文件入口；非空时由 UI 渲染「查看 / 转APK / 展开」三按钮弹窗。 */
+    var pendingApksEntry by mutableStateOf<FileEntry?>(null)
+
+    /** 正在从 .apks 中解出 base.apk 以查看信息（弹真实进度条）。 */
+    var apksInfoExtracting by mutableStateOf(false)
+        private set
+    var apksInfoProgress by mutableFloatStateOf(0f)
+        private set
+    /** 解析 .apks 信息失败时的错误信息；非空时弹错误提示。 */
+    var apksInfoError by mutableStateOf<String?>(null)
+
     /** 「使用应用打开」选择面板的当前文件；非空时由 UI 渲染选择面板（第一页应用内 / 第二页第三方应用） */
     var pendingOpenWithEntry by mutableStateOf<FileEntry?>(null)
     /** 选择面板是否处于第二页（第三方应用列表） */
@@ -3774,7 +3789,95 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         performVaultDecrypt(entry, session, ctrl, cacheType)
     }
 
+    // ── .apks 处理 ──
 
+    /**
+     * 从 .apks（本质是 zip）中解出主包 base.apk 到缓存临时文件，用于展示 APK 信息。
+     * 全程使用内存流写缓存，不进入文件管理器目录；关闭信息弹窗时删除临时文件。
+     */
+    fun openApksInfo(entry: FileEntry) {
+        if (apksInfoExtracting) return
+        pendingApksEntry = null
+        apksInfoError = null
+        apksInfoExtracting = true
+        apksInfoProgress = 0f
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val entries = JBindingClient.listArchiveEntries(entry.path).getOrElse { e ->
+                    withContext(Dispatchers.Main) {
+                        apksInfoExtracting = false
+                        apksInfoError = e.message ?: "无法读取 .apks 内容"
+                    }
+                    return@launch
+                }
+                // 主包通常为 base.apk（忽略目录、大小写、路径前缀）
+                val base = entries.firstOrNull {
+                    !it.isDirectory && it.path.substringAfterLast('/').equals("base.apk", ignoreCase = true)
+                } ?: entries.firstOrNull { !it.isDirectory && it.path.endsWith(".apk", ignoreCase = true) }
+
+                if (base == null) {
+                    withContext(Dispatchers.Main) {
+                        apksInfoExtracting = false
+                        apksInfoError = "在 .apks 中未找到 base.apk"
+                    }
+                    return@launch
+                }
+
+                val tempDir = AppDataPaths.cacheDir(context, "apks_info")
+                val tempFile = File(tempDir, "base_${System.currentTimeMillis()}.apk")
+
+                val result = FileOutputStream(tempFile).use { out ->
+                    JBindingClient.extractSingleFileToSink(
+                        archivePath = entry.path,
+                        entryPath = base.path,
+                        onProgress = { done, total ->
+                            if (total > 0) {
+                                val p = (done.toFloat() / total).coerceIn(0f, 1f)
+                                viewModelScope.launch(Dispatchers.Main) { apksInfoProgress = p }
+                            }
+                        }
+                    ) { bytes ->
+                        out.write(bytes)
+                    }
+                }
+
+                result.fold(
+                    onSuccess = {
+                        withContext(Dispatchers.Main) {
+                            apkInfoTempPath = tempFile.absolutePath
+                            apksInfoExtracting = false
+                            pendingApkEntry = entry.copy(path = tempFile.absolutePath)
+                        }
+                    },
+                    onFailure = { e ->
+                        tempFile.delete()
+                        withContext(Dispatchers.Main) {
+                            apksInfoExtracting = false
+                            apksInfoError = e.message ?: "解出 base.apk 失败"
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    apksInfoExtracting = false
+                    apksInfoError = e.message ?: "解出 base.apk 失败"
+                }
+            }
+        }
+    }
+
+    /** 关闭 APK 信息弹窗，并清理 .apks 解出的临时 base.apk。 */
+    fun dismissApkInfo() {
+        pendingApkEntry = null
+        apkInfoTempPath?.let { runCatching { File(it).delete() } }
+        apkInfoTempPath = null
+    }
+
+    /** 以压缩包形式打开 .apks（zip）。 */
+    fun openApksAsArchive(entry: FileEntry) {
+        pendingApksEntry = null
+        openArchive(entry)
+    }
 
     // ── 文件夹大小统计 ──
 
@@ -4188,6 +4291,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
+        if (entry.name.endsWith(".apks", ignoreCase = true)) {
+            DiagnosticLog.log("OpenFile", ".apks 文件，弹出选择弹窗: ${entry.name}")
+            pendingApksEntry = entry
+            return
+        }
         if (entry.name.endsWith(".apk", ignoreCase = true)) {
             DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")
             pendingApkEntry = entry

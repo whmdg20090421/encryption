@@ -3236,7 +3236,53 @@ fun FileManagerScreen(
     vm.pendingApkEntry?.let { entry ->
         ApkInfoDialog(
             apkPath = entry.path,
-            onDismiss = { vm.pendingApkEntry = null }
+            onDismiss = { vm.dismissApkInfo() }
+        )
+    }
+
+    // ── .apks 选择弹窗（查看 / 转APK / 展开）──
+    vm.pendingApksEntry?.let { entry ->
+        ApksActionDialog(
+            fileName = entry.name,
+            onDismiss = { vm.pendingApksEntry = null },
+            onView = { vm.openApksInfo(entry) },
+            onExtract = { vm.openApksAsArchive(entry) }
+        )
+    }
+
+    // ── .apks 解出 base.apk 查看信息的进度 ──
+    if (vm.apksInfoExtracting) {
+        StandardDialog(
+            onDismissRequest = { },
+            title = { Text("正在读取安装包信息") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    LinearProgressIndicator(
+                        progress = { vm.apksInfoProgress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = "${(vm.apksInfoProgress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        )
+    }
+
+    // ── .apks 信息解析失败 ──
+    vm.apksInfoError?.let { error ->
+        StandardDialog(
+            onDismissRequest = { vm.apksInfoError = null },
+            title = { Text("无法读取安装包") },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = { vm.apksInfoError = null }) { Text("关闭") }
+            }
         )
     }
 
@@ -7493,5 +7539,68 @@ private fun SwipeToDeleteShortcut(
             verticalAlignment = Alignment.CenterVertically,
             content = content
         )
+    }
+}
+
+// ── .apks 操作弹窗（居中，三个按钮各占一行；点击外部关闭且不穿透）──
+@Composable
+private fun ApksActionDialog(
+    fileName: String,
+    onDismiss: () -> Unit,
+    onView: () -> Unit,
+    onExtract: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "安装包集合",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                )
+
+                OutlinedButton(
+                    onClick = onView,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("查看")
+                }
+                OutlinedButton(
+                    onClick = {},
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("转APK")
+                }
+                OutlinedButton(
+                    onClick = onExtract,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("展开")
+                }
+            }
+        }
     }
 }
