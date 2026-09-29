@@ -161,6 +161,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 enum class FocusedPanel { LEFT, RIGHT;
     val index: Int get() = ordinal
@@ -299,6 +302,27 @@ fun FileManagerScreen(
         val req = AppNavigation.consumeFileManager() ?: return@LaunchedEffect
         vm.focusedPanel = FocusedPanel.LEFT
         vm.navigateToWithScroll(req.path)
+    }
+
+    // 回到前台（从后台切回 / 息屏点亮 / 从其他 Activity 返回）时刷新双面板，
+    // 避免停留期间外部改动或列表失效导致内容过期或空白。
+    // 文件操作进行中不打断，避免清空并重载列表干扰正在跑的复制/移动/删除。
+    // 首次进入时 lifecycle 已处于 RESUMED，addObserver 会立即补发一次 ON_RESUME，
+    // 该次并非「从后台返回」，跳过以免与面板初始化竞争。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        var firstResumeHandled = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (firstResumeHandled) {
+                    firstResumeHandled = false
+                } else if (FileOperationManager.progress.value == null) {
+                    vm.refreshBoth()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // 退出时清理云盘模式
