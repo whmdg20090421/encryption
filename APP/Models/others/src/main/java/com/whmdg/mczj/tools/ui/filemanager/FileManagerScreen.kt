@@ -16,6 +16,7 @@ import com.whmdg.mczj.tools.ui.ErrorDialog
 import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
+import com.whmdg.mczj.tools.ui.AppNavigation
 import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
 import com.whmdg.mczj.tools.ui.isDebugAuth
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
@@ -104,6 +105,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import com.whmdg.mczj.tools.ui.components.categorizeFile
 import com.whmdg.mczj.tools.ui.components.extractExtension
+import com.whmdg.mczj.tools.ui.components.isApkFileName
 import com.whmdg.mczj.tools.ui.components.getFileTypeDrawableRes
 import com.whmdg.mczj.tools.ui.components.FileCategory
 import com.whmdg.mczj.tools.ui.components.FileTypeIcon
@@ -289,6 +291,14 @@ fun FileManagerScreen(
         if (cloudMode && webdavConfig != null && cloudVaultDir != null) {
             vm.panels.enterCloudMode(webdavConfig, cloudVaultDir, cloudVaultId, cloudVaultName, vaultSession)
         }
+    }
+
+    // 来自其他界面的定位请求（如安装包提取完成后点击「定位」）：
+    // 以请求对象为 key，首次进入时面板初始化与定位在同一帧，或文件管理器已在栈顶时直接定位。
+    LaunchedEffect(AppNavigation.pendingFileManager) {
+        val req = AppNavigation.consumeFileManager() ?: return@LaunchedEffect
+        vm.focusedPanel = FocusedPanel.LEFT
+        vm.navigateToWithScroll(req.path)
     }
 
     // 退出时清理云盘模式
@@ -2107,7 +2117,7 @@ fun FileManagerScreen(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             val hExt = extractExtension(entry.name)
-                                            val hCategory = categorizeFile(hExt)
+                                            val hCategory = if (isApkFileName(entry.name)) FileCategory.APK else categorizeFile(hExt)
                                             val hDrawableRes = if (!entry.isDirectory) getFileTypeDrawableRes(hCategory) else null
                                             if (hDrawableRes != null) {
                                                 Icon(
@@ -6214,7 +6224,7 @@ private fun FileEntryRow(
                         val originalName = entry.name
                         val iconFileName = if (vaultContext != null) originalName.removeSuffix(".whm") else originalName
                         val ext = extractExtension(iconFileName)
-                        val category = categorizeFile(ext)
+                        val category = if (isApkFileName(iconFileName)) FileCategory.APK else categorizeFile(ext)
                         val isMediaFile = (category == FileCategory.IMAGE || category == FileCategory.VIDEO)
                             && !entry.isDirectory && entry.name != "返回上一级"
 

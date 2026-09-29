@@ -188,6 +188,15 @@ fun MainAppContainer() {
         backStack.add(screen)
     }
 
+    // 来自独立 Activity（如安装包提取）的文件管理器定位请求：
+    // 先让文件管理器成为栈顶（复用已有实例消费请求），再由 FileManagerScreen 定位到目标目录。
+    LaunchedEffect(AppNavigation.pendingFileManager) {
+        if (AppNavigation.pendingFileManager == null) return@LaunchedEffect
+        if (backStack.last() !is Screen.FileManager) {
+            backStack.add(Screen.FileManager())
+        }
+    }
+
     fun navigateBack() {
         if (backStack.size > 1) {
             backStack.removeAt(backStack.size - 1)

@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.whmdg.mczj.tools.AppDataPaths
+import com.whmdg.mczj.tools.ui.AppNavigation
 import com.whmdg.mczj.tools.ui.components.AppInfoDialog
 import com.whmdg.mczj.tools.ui.components.AppInfoRowData
 import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
@@ -42,6 +43,7 @@ import com.whmdg.mczj.tools.util.FormatUtils
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
@@ -184,7 +186,7 @@ fun PackageManagerScreen(onBack: () -> Unit) {
     }
 
     selectedApp?.let { app ->
-        AppPackageInfoDialog(app = app, onDismiss = { selectedApp = null })
+        AppPackageInfoDialog(app = app, onDismiss = { selectedApp = null }, onBack = onBack)
     }
 }
 
@@ -247,7 +249,11 @@ private fun AppPackageCard(app: AppPackageInfo, onClick: () -> Unit) {
 
 /** 应用详情弹窗：复用 core 的 AppInfoDialog 外壳，与 ApkInfoDialog 保持一致 */
 @Composable
-private fun AppPackageInfoDialog(app: AppPackageInfo, onDismiss: () -> Unit) {
+private fun AppPackageInfoDialog(
+    app: AppPackageInfo,
+    onDismiss: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -261,6 +267,8 @@ private fun AppPackageInfoDialog(app: AppPackageInfo, onDismiss: () -> Unit) {
     var conflictName by remember { mutableStateOf<String?>(null) }
     var conflictCont by remember { mutableStateOf<CancellableContinuation<ApkExtractor.ConflictDecision>?>(null) }
     val cancelFlag = remember { AtomicBoolean(false) }
+    // 提取完成提示：非空时弹窗展示产物名称与路径
+    var extractedResult by remember { mutableStateOf<ApkExtractor.Result.Success?>(null) }
 
     // 从系统设置返回后，若已授权则自动继续等待用户再次点击（不自动触发，避免状态错乱）
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -315,14 +323,15 @@ private fun AppPackageInfoDialog(app: AppPackageInfo, onDismiss: () -> Unit) {
             isExtracting = false
             conflictName = null
             conflictCont = null
-            val message = when (result) {
-                is ApkExtractor.Result.Success ->
-                    "已提取到 ${result.outputPath}"
-                ApkExtractor.Result.Skipped -> "已跳过，目标文件已存在"
-                ApkExtractor.Result.Cancelled -> "已取消提取"
-                is ApkExtractor.Result.Failed -> "提取失败：${result.message}"
+            when (result) {
+                is ApkExtractor.Result.Success -> extractedResult = result
+                ApkExtractor.Result.Skipped ->
+                    Toast.makeText(context, "已跳过，目标文件已存在", Toast.LENGTH_LONG).show()
+                ApkExtractor.Result.Cancelled ->
+                    Toast.makeText(context, "已取消提取", Toast.LENGTH_LONG).show()
+                is ApkExtractor.Result.Failed ->
+                    Toast.makeText(context, "提取失败：${result.message}", Toast.LENGTH_LONG).show()
             }
-            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -465,6 +474,43 @@ private fun AppPackageInfoDialog(app: AppPackageInfo, onDismiss: () -> Unit) {
             dismissButton = {
                 TextButton(onClick = { cancelFlag.set(true) }) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 提取完成：展示产物名称与路径，可一键定位到文件管理器 ──
+    extractedResult?.let { success ->
+        val output = File(success.outputPath)
+        val dirPath = output.parent ?: ""
+        StandardDialog(
+            onDismissRequest = { extractedResult = null },
+            title = { Text("提取完成", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = output.name,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = success.outputPath,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    extractedResult = null
+                    AppNavigation.requestFileManager(dirPath)
+                    onBack()
+                }) {
+                    Text("定位")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { extractedResult = null }) {
+                    Text("关闭")
                 }
             }
         )

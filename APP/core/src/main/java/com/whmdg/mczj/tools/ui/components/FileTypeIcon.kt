@@ -113,6 +113,22 @@ val APK_EXTENSIONS: Set<String> = setOf(
     "apk", "xapk", "apks", "aab"
 )
 
+/**
+ * 判断文件名是否应作为 APK 处理。
+ *
+ * 除常规 `.apk` 外，下载器常以 `.apk.1`、`.apk.2` 等数字追加后缀标记分段/未完成下载，
+ * 这类文件同样是 APK。为避免误判（如 `.apk.bak`、`.apk.tmp`），仅当 `.apk.` 之后的
+ * 内容全部为数字时才认定为 APK。
+ */
+fun isApkFileName(filename: String): Boolean {
+    val lower = filename.lowercase()
+    if (lower.endsWith(".apk")) return true
+    val idx = lower.lastIndexOf(".apk.")
+    if (idx < 0) return false
+    val tail = lower.substring(idx + 5)
+    return tail.isNotEmpty() && tail.all { it.isDigit() }
+}
+
 /** 从文件名提取后缀（小写，不含点号） */
 fun extractExtension(filename: String): String {
     val dotIndex = filename.lastIndexOf('.')
@@ -180,7 +196,8 @@ fun FileTypeIcon(
     iconSize: Dp = 18.dp,
     fallbackIcon: ImageVector = Icons.Default.InsertDriveFile
 ) {
-    val category = categorizeFile(extractExtension(filename))
+    val category = if (isApkFileName(filename)) FileCategory.APK
+        else categorizeFile(extractExtension(filename))
     val context = LocalContext.current
 
     // APK 文件：动态读取应用自身图标

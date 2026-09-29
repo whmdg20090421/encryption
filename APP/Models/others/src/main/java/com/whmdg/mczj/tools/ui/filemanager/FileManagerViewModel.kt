@@ -1805,36 +1805,36 @@ class FilePaneController(
             "文件夹"
         } else {
             val ext = entry.name.substringAfterLast('.', "").lowercase()
-            when (ext) {
-                "png" -> "PNG 图片"
-                "jpg", "jpeg" -> "JPEG 图片"
-                "gif" -> "GIF 图片"
-                "webp" -> "WebP 图片"
-                "bmp" -> "BMP 图片"
-                "mp4" -> "MP4 视频"
-                "mkv" -> "MKV 视频"
-                "avi" -> "AVI 视频"
-                "mp3" -> "MP3 音频"
-                "flac" -> "FLAC 音频"
-                "wav" -> "WAV 音频"
-                "zip" -> "ZIP 压缩包"
-                "rar" -> "RAR 压缩包"
-                "7z" -> "7Z 压缩包"
-                "tar" -> "TAR 归档"
-                "gz" -> "GZ 压缩"
-                "apk" -> "APK 安装包"
-                "txt" -> "文本文件"
-                "pdf" -> "PDF 文档"
-                "doc", "docx" -> "Word 文档"
-                "xls", "xlsx" -> "Excel 表格"
-                "json" -> "JSON 文件"
-                "xml" -> "XML 文件"
-                "html", "htm" -> "HTML 文件"
-                "js" -> "JavaScript 文件"
-                "kt" -> "Kotlin 文件"
-                "java" -> "Java 文件"
-                "py" -> "Python 文件"
-                "sh" -> "Shell 脚本"
+            when {
+                com.whmdg.mczj.tools.ui.components.isApkFileName(entry.name) -> "APK 安装包"
+                ext == "png" -> "PNG 图片"
+                ext == "jpg" || ext == "jpeg" -> "JPEG 图片"
+                ext == "gif" -> "GIF 图片"
+                ext == "webp" -> "WebP 图片"
+                ext == "bmp" -> "BMP 图片"
+                ext == "mp4" -> "MP4 视频"
+                ext == "mkv" -> "MKV 视频"
+                ext == "avi" -> "AVI 视频"
+                ext == "mp3" -> "MP3 音频"
+                ext == "flac" -> "FLAC 音频"
+                ext == "wav" -> "WAV 音频"
+                ext == "zip" -> "ZIP 压缩包"
+                ext == "rar" -> "RAR 压缩包"
+                ext == "7z" -> "7Z 压缩包"
+                ext == "tar" -> "TAR 归档"
+                ext == "gz" -> "GZ 压缩"
+                ext == "txt" -> "文本文件"
+                ext == "pdf" -> "PDF 文档"
+                ext == "doc" || ext == "docx" -> "Word 文档"
+                ext == "xls" || ext == "xlsx" -> "Excel 表格"
+                ext == "json" -> "JSON 文件"
+                ext == "xml" -> "XML 文件"
+                ext == "html" || ext == "htm" -> "HTML 文件"
+                ext == "js" -> "JavaScript 文件"
+                ext == "kt" -> "Kotlin 文件"
+                ext == "java" -> "Java 文件"
+                ext == "py" -> "Python 文件"
+                ext == "sh" -> "Shell 脚本"
                 else -> if (ext.isNotEmpty()) "${ext.uppercase()} 文件" else "文件"
             }
         }
@@ -3702,7 +3702,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 视频 / 压缩包 / APK 等大文件：解密耗时长且占缓存空间，先弹窗确认
         val needsConfirm = cacheType == VaultCacheType.VIDEO ||
             ext in com.whmdg.mczj.tools.ui.components.ARCHIVE_EXTENSIONS ||
-            ext in com.whmdg.mczj.tools.ui.components.APK_EXTENSIONS
+            com.whmdg.mczj.tools.ui.components.isApkFileName(originalName)
         if (needsConfirm) {
             pendingVaultDecryptEntry = entry
             return
@@ -4296,7 +4296,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             pendingApksEntry = entry
             return
         }
-        if (entry.name.endsWith(".apk", ignoreCase = true)) {
+        if (com.whmdg.mczj.tools.ui.components.isApkFileName(entry.name)) {
             DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")
             pendingApkEntry = entry
             return
