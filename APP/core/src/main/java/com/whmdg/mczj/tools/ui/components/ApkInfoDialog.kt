@@ -7,12 +7,18 @@ import android.os.Build
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.whmdg.mczj.tools.util.AppHardeningDetector
 import com.whmdg.mczj.tools.util.AppSignatureDetector
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.FormatUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** APK 解析信息 */
@@ -119,36 +125,42 @@ fun ApkInfoDialog(
     onViewAsArchive: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val apkInfo = remember(apkPath) { loadApkInfo(context, apkPath) }
+    var apkInfo by remember(apkPath) { mutableStateOf<ApkInfo?>(null) }
+    var loadFailed by remember(apkPath) { mutableStateOf(false) }
+    var loaded by remember(apkPath) { mutableStateOf(false) }
 
-    if (apkInfo == null) {
-        onDismiss()
-        return
+    LaunchedEffect(apkPath) {
+        apkInfo = withContext(Dispatchers.IO) { loadApkInfo(context, apkPath) }
+        loadFailed = apkInfo == null
+        loaded = true
     }
 
-    val rows = buildList {
-        add(AppInfoRowData("包名", apkInfo.packageName))
-        add(AppInfoRowData("版本号", apkInfo.versionCode.toString()))
-        add(AppInfoRowData("安装包大小", FormatUtils.formatBytes(apkInfo.fileSize)))
-        add(AppInfoRowData("签名状态", apkInfo.signatureStatus))
-        add(AppInfoRowData("加固状态", apkInfo.hardeningStatus))
-        add(AppInfoRowData("已安装", apkInfo.installedVersion))
-        if (apkInfo.isInstalled) {
-            add(AppInfoRowData("内部数据目录", apkInfo.dataDir1))
-            add(AppInfoRowData("外部数据目录", apkInfo.dataDir2))
-        }
-        add(AppInfoRowData("APK 路径", apkInfo.apkPath))
-        if (apkInfo.isInstalled) {
-            add(AppInfoRowData("UID", apkInfo.uid.toString()))
+    val rows = apkInfo?.let { info ->
+        buildList {
+            add(AppInfoRowData("包名", info.packageName))
+            add(AppInfoRowData("版本号", info.versionCode.toString()))
+            add(AppInfoRowData("安装包大小", FormatUtils.formatBytes(info.fileSize)))
+            add(AppInfoRowData("签名状态", info.signatureStatus))
+            add(AppInfoRowData("加固状态", info.hardeningStatus))
+            add(AppInfoRowData("已安装", info.installedVersion))
+            if (info.isInstalled) {
+                add(AppInfoRowData("内部数据目录", info.dataDir1))
+                add(AppInfoRowData("外部数据目录", info.dataDir2))
+            }
+            add(AppInfoRowData("APK 路径", info.apkPath))
+            if (info.isInstalled) {
+                add(AppInfoRowData("UID", info.uid.toString()))
+            }
         }
     }
 
     AppInfoDialog(
-        icon = apkInfo.appIcon,
-        appName = apkInfo.appName,
-        versionName = apkInfo.versionName,
+        icon = apkInfo?.appIcon,
+        appName = apkInfo?.appName.orEmpty(),
+        versionName = apkInfo?.versionName.orEmpty(),
         rows = rows,
         onDismiss = onDismiss,
+        loadFailed = loaded && loadFailed,
         buttons = {
             TextButton(onClick = {}, enabled = false) { Text("功能") }
             TextButton(onClick = {
