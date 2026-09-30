@@ -1,170 +1,58 @@
 package com.whmdg.mczj.tools.security
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.util.Base64
 import android.util.Log
-import android.widget.Toast
 
+import moe.shizuku.server.IShizukuService
 import rikka.shizuku.Shizuku
 
 /**
- * Shizuku 授权工具类
- * 使用 UserService 模式执行特权 shell 命令（已移除已废弃的 newProcess）。
- * UserService 断开时自动同步重连，重连失败返回错误。
+ * Shizuku 授权工具类。
+ *
+ * 采用直连 Shizuku binder + `IShizukuService.newProcess` 的方式执行特权 shell 命令
+ * （与 Operit 一致），不使用 UserService。进程以 Shizuku 身份（ADB 后端 uid 2000，
+ * Root 后端 uid 0）运行，等价 ADB 能力。
+ *
+ * 无阻塞式绑定：`Shizuku.getBinder()` 只读取 ShizukuProvider 注入的缓存字段（0 IPC）。
+ * 每次命令仅一次 `newProcess` IPC，全部在调用方线程（IO）执行，不阻塞主线程。
  */
 object ShizukuAuthorizer {
     private const val TAG = "ShizukuAuthorizer"
     private const val SHIZUKU_PACKAGE_NAME = "moe.shizuku.privileged.api"
-    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var binderReceivedListenerRegistered = false
-    private var isServiceAvailable = false
     private var lastError = ""
 
-    // UserService 相关
-    private var shellService: IShellService? = null
-    private var isBinding = false
-    private val bindLock = Object()
-    private var appContext: Context? = null
-    private var hasShownConnectToast = false
-    private var bindStartTime = 0L
-    private val pendingCallbacks = mutableListOf<(Boolean) -> Unit>()
-
-    private fun getUserServiceArgs(): Shizuku.UserServiceArgs {
-        val ctx = appContext ?: throw IllegalStateException("ShizukuAuthorizer 未初始化，appContext 为空")
-        return Shizuku.UserServiceArgs(
-            ComponentName(ctx.packageName, ShellService::class.java.name)
-        )
-            .daemon(false)
-            .processNameSuffix("shell_service")
-            .version(1)
-    }
+    /** 缓存的 IShizukuService。 */
+    @Volatile
+    private var serviceCache: IShizukuService? = null
 
     /**
-     * 初始化 Shizuku 绑定监听。
-     * 应在 Application.onCreate 或首次使用前调用。
-     * @param context Application 或 Activity context，用于 Toast 显示
+     * 初始化 Shizuku binder 监听。应在 Application.onCreate 或首次使用前调用。
+     * @param context Application 或 Activity context
      */
     fun initialize(context: Context? = null) {
-        if (context != null) appContext = context.applicationContext
-
         if (binderReceivedListenerRegistered) return
 
         try {
             Shizuku.addBinderReceivedListener {
-                isServiceAvailable = true
                 lastError = ""
             }
             Shizuku.addBinderDeadListener {
-                isServiceAvailable = false
                 lastError = "Shizuku binder 已断开"
-                synchronized(bindLock) {
-                    shellService = null
-                    isBinding = false
-                }
+                serviceCache = null
             }
             binderReceivedListenerRegistered = true
-
-            // 检查是否已在运行
-            if (isShizukuServiceRunning()) {
-                isServiceAvailable = true
-            }
         } catch (e: Exception) {
             lastError = "初始化失败: ${e.message}"
         }
     }
 
     /**
-     * 异步绑定 UserService，不阻塞主线程。
-     * 如果已绑定则立即回调 true。
-     */
-    fun ensureBound(callback: (Boolean) -> Unit) {
-        synchronized(bindLock) {
-            if (shellService != null) {
-                callback(true)
-                return
-            }
-            pendingCallbacks.add(callback)
-            if (isBinding) return // 已在绑定中，等待结果
-            isBinding = true
-            bindStartTime = System.currentTimeMillis()
-        }
-
-        try {
-            Shizuku.bindUserService(getUserServiceArgs(), object : ServiceConnection {
-                override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-                    val elapsed = System.currentTimeMillis() - bindStartTime
-                    val service = IShellService.Stub.asInterface(binder)
-                    synchronized(bindLock) {
-                        shellService = service
-                        isBinding = false
-                        pendingCallbacks.forEach { it(true) }
-                        pendingCallbacks.clear()
-                    }
-
-                    Log.i(TAG, "UserService 已连接，用时${elapsed}ms")
-
-                    // 首次连接 Toast 提示
-                    if (!hasShownConnectToast) {
-                        hasShownConnectToast = true
-                        val timeStr = if (elapsed >= 2000) {
-                            "%.1f秒".format(elapsed / 1000.0)
-                        } else {
-                            "${elapsed}毫秒"
-                        }
-                        val ctx = appContext
-                        if (ctx != null) {
-                            mainHandler.post {
-                                Toast.makeText(
-                                    ctx,
-                                    "Shizuku UserService 已连接，用时$timeStr",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        }
-                    }
-
-                    // 监听 binder 死亡
-                    try {
-                        binder.linkToDeath({
-                            synchronized(bindLock) {
-                                shellService = null
-                                Log.w(TAG, "UserService binder 已死亡")
-                            }
-                        }, 0)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "linkToDeath 失败: ${e.message}")
-                    }
-                }
-
-                override fun onServiceDisconnected(name: ComponentName) {
-                    synchronized(bindLock) {
-                        shellService = null
-                        isBinding = false
-                    }
-                    Log.w(TAG, "UserService 已断开")
-                }
-            })
-        } catch (e: Exception) {
-            synchronized(bindLock) {
-                isBinding = false
-                pendingCallbacks.forEach { it(false) }
-                pendingCallbacks.clear()
-            }
-            lastError = "绑定 UserService 失败: ${e.message}"
-            Log.e(TAG, lastError, e)
-        }
-    }
-
-    /**
-     * 检查 Shizuku 是否已安装
+     * 检查 Shizuku 是否已安装。
      */
     fun isShizukuInstalled(context: Context): Boolean {
         return try {
@@ -178,7 +66,7 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 检查 Shizuku 服务是否正在运行
+     * 检查 Shizuku 服务是否正在运行（binder 存活）。
      */
     fun isShizukuServiceRunning(): Boolean {
         return try {
@@ -189,7 +77,7 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 检查应用是否已被 Shizuku 授权
+     * 检查应用是否已被 Shizuku 授权。
      */
     fun hasShizukuPermission(): Boolean {
         return try {
@@ -205,7 +93,14 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 请求 Shizuku 权限
+     * Shizuku 服务是否已启动且本应用已获授权。
+     */
+    fun isAvailable(): Boolean {
+        return isShizukuServiceRunning() && hasShizukuPermission()
+    }
+
+    /**
+     * 请求 Shizuku 权限。
      */
     fun requestShizukuPermission(onResult: (Boolean) -> Unit) {
         if (!isShizukuServiceRunning()) {
@@ -236,243 +131,241 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 通过 Shizuku 执行 shell 命令（仅 UserService 模式）。
-     * 首次调用异步绑定 UserService；断连后自动短超时重连（200ms × 3 次）。
-     * @return Triple(stdout, stderr, exitCode)
+     * 获取（或缓存）IShizukuService 接口。
+     * 仅当 binder 存活且权限已授予时返回非空。
+     */
+    private fun getService(): IShizukuService? {
+        val cached = serviceCache
+        if (cached != null) {
+            val alive = try {
+                cached.asBinder().pingBinder()
+            } catch (_: Exception) {
+                false
+            }
+            if (alive) return cached
+            serviceCache = null
+        }
+
+        if (!isAvailable()) return null
+
+        return try {
+            val binder: IBinder = Shizuku.getBinder() ?: return null
+            if (!binder.isBinderAlive) return null
+            val service = IShizukuService.Stub.asInterface(binder) ?: return null
+            serviceCache = service
+            service
+        } catch (e: Exception) {
+            Log.e(TAG, "获取 IShizukuService 失败: ${e.message}", e)
+            lastError = "获取 Shizuku 服务失败: ${e.message}"
+            null
+        }
+    }
+
+    /**
+     * 通过 Shizuku `newProcess` 同步执行命令，返回 (stdout, stderr, exitCode)。
+     * 需在 IO 线程调用。
+     * @throws ShizukuUnavailableException 服务不可用时抛出，由调用方决定回退
      */
     fun executeCommand(command: String): Triple<String, String, Int> {
-        // 快速路径：UserService 已就绪
-        val service = shellService
-        if (service != null) {
-            try {
-                val rawResult = service.execute(command)
-                return parseResult(rawResult)
-            } catch (e: Exception) {
-                synchronized(bindLock) { shellService = null }
-                Log.w(TAG, "UserService 调用失败: ${e.message}，尝试重连")
-                return reconnectAndRetry(command)
-            }
-        }
+        val service = getService() ?: throw ShizukuUnavailableException(
+            lastError.ifBlank { "Shizuku 服务不可用" }
+        )
 
-        // 首次调用：异步绑定 UserService
-        ensureBound { /* 后续调用自动走快速路径 */ }
-        return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
+        val process = try {
+            service.newProcess(arrayOf("sh", "-c", command), null, null)
+        } catch (e: Exception) {
+            throw ShizukuUnavailableException("newProcess 失败: ${e.message}")
+        } ?: throw ShizukuUnavailableException("Shizuku newProcess 返回空")
+
+        // 并发读取 stdout / stderr，避免单流填满管道导致进程阻塞
+        try {
+            val outReader = readAsync(process.inputStream)
+            val errReader = readAsync(process.errorStream)
+            val exitCode = process.waitFor()
+            return Triple(outReader.get(), errReader.get(), exitCode)
+        } catch (e: ShizukuUnavailableException) {
+            throw e
+        } catch (e: Exception) {
+            throw ShizukuUnavailableException("执行失败: ${e.message}")
+        } finally {
+            try { process.destroy() } catch (_: Exception) {}
+        }
     }
 
     /**
-     * 通过 Shizuku 执行命令，stderr 通过 PFD 管道实时返回。
-     * 首次调用异步绑定 UserService；断连后自动短超时重连（200ms × 3 次）。
-     * @param command shell 命令
-     * @param stderrWriteFd 管道写端（客户端创建）
-     * @return Triple(stdout, stderr, exitCode)，stderr 为空（已通过 pipe 传输）
+     * 通过 Shizuku `newProcess` 流式执行命令，逐行回调 stdout（或 stderr）。
+     * 需在 IO 线程调用。
+     * @param useStderr true 时回调 stderr，false 时回调 stdout
+     * @param cancelFlag 为 true 时中断读取
+     * @param onOutputLine 每行输出回调
+     * @return exitCode
      */
-    fun executeStreamingStderr(command: String, stderrWriteFd: ParcelFileDescriptor): Triple<String, String, Int> {
-        val service = shellService
-        if (service != null) {
-            try {
-                val rawResult = service.executeStreamingStderr(command, stderrWriteFd)
-                return parseResult(rawResult)
-            } catch (e: Exception) {
-                synchronized(bindLock) { shellService = null }
-                Log.w(TAG, "UserService executeStreamingStderr 失败: ${e.message}，尝试重连")
-                return reconnectAndRetryStreamingStderr(command, stderrWriteFd)
-            }
-        }
-
-        ensureBound { /* 后续调用自动走快速路径 */ }
-        return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
-    }
-
-    /** 断连后重连并重试 executeStreamingStderr（200ms 超时 × 3 次） */
-    private fun reconnectAndRetryStreamingStderr(
+    fun executeStreaming(
         command: String,
-        stderrWriteFd: ParcelFileDescriptor
-    ): Triple<String, String, Int> {
-        for (attempt in 1..3) {
-            if (rebindSync(200)) {
-                val retryService = shellService
-                if (retryService != null) {
-                    try {
-                        return parseResult(retryService.executeStreamingStderr(command, stderrWriteFd))
-                    } catch (_: Exception) {
-                        synchronized(bindLock) { shellService = null }
-                    }
+        useStderr: Boolean,
+        cancelFlag: java.util.concurrent.atomic.AtomicBoolean?,
+        onOutputLine: (String) -> Unit
+    ): Int {
+        val service = getService() ?: throw ShizukuUnavailableException(
+            lastError.ifBlank { "Shizuku 服务不可用" }
+        )
+
+        val process = try {
+            service.newProcess(arrayOf("sh", "-c", command), null, null)
+        } catch (e: Exception) {
+            throw ShizukuUnavailableException("newProcess 失败: ${e.message}")
+        } ?: throw ShizukuUnavailableException("Shizuku newProcess 返回空")
+
+        return try {
+            val pfd = if (useStderr) process.errorStream else process.inputStream
+            pfdAutoCloseInputStream(pfd).bufferedReader().use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    if (cancelFlag?.get() == true) break
+                    onOutputLine(line!!)
                 }
             }
+            process.waitFor()
+        } catch (e: Exception) {
+            throw ShizukuUnavailableException("流式执行失败: ${e.message}")
+        } finally {
+            try { process.destroy() } catch (_: Exception) {}
         }
-        return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
     }
 
     /**
-     * 通过 Shizuku 执行命令，stdout 通过 PFD 管道实时返回。
-     * 与 executeStreamingStderr 对称。
-     */
-    fun executeStreamingStdout(command: String, stdoutWriteFd: ParcelFileDescriptor): Triple<String, String, Int> {
-        val service = shellService
-        if (service != null) {
-            try {
-                val rawResult = service.executeStreamingStdout(command, stdoutWriteFd)
-                return parseResult(rawResult)
-            } catch (e: Exception) {
-                synchronized(bindLock) { shellService = null }
-                Log.w(TAG, "UserService executeStreamingStdout 失败: ${e.message}，尝试重连")
-                return reconnectAndRetryStreamingStdout(command, stdoutWriteFd)
-            }
-        }
-
-        ensureBound { /* 后续调用自动走快速路径 */ }
-        return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
-    }
-
-    /** 断连后重连并重试 executeStreamingStdout（200ms 超时 × 3 次） */
-    private fun reconnectAndRetryStreamingStdout(
-        command: String,
-        stdoutWriteFd: ParcelFileDescriptor
-    ): Triple<String, String, Int> {
-        for (attempt in 1..3) {
-            if (rebindSync(200)) {
-                val retryService = shellService
-                if (retryService != null) {
-                    try {
-                        return parseResult(retryService.executeStreamingStdout(command, stdoutWriteFd))
-                    } catch (_: Exception) {
-                        synchronized(bindLock) { shellService = null }
-                    }
-                }
-            }
-        }
-        return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
-    }
-
-    /** 断连后重连并重试（200ms 超时 × 3 次） */
-    private fun reconnectAndRetry(command: String): Triple<String, String, Int> {
-        for (attempt in 1..3) {
-            if (rebindSync(200)) {
-                val retryService = shellService
-                if (retryService != null) {
-                    try {
-                        return parseResult(retryService.execute(command))
-                    } catch (_: Exception) {
-                        synchronized(bindLock) { shellService = null }
-                    }
-                }
-            }
-        }
-        return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
-    }
-
-    /**
-     * 同步等待 UserService 重绑，最多等待 [timeoutMs] 毫秒。
-     * @return true 表示重绑成功
-     */
-    private fun rebindSync(timeoutMs: Long): Boolean {
-        val latch = java.util.concurrent.CountDownLatch(1)
-        var success = false
-        ensureBound { result ->
-            success = result
-            latch.countDown()
-        }
-        return latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && success
-    }
-
-    /**
-     * 解析 UserService 返回的 Base64 编码结果。
-     * 格式: "stdoutBase64\nstderrBase64\nexitCode"
-     */
-    private fun parseResult(result: String): Triple<String, String, Int> {
-        val lines = result.split("\n", limit = 3)
-        val stdout = try {
-            Base64.decode(lines.getOrElse(0) { "" }, Base64.NO_WRAP).toString(Charsets.UTF_8)
-        } catch (_: Exception) { "" }
-        val stderr = try {
-            Base64.decode(lines.getOrElse(1) { "" }, Base64.NO_WRAP).toString(Charsets.UTF_8)
-        } catch (_: Exception) { "" }
-        val exitCode = lines.getOrElse(2) { "-1" }.trim().toIntOrNull() ?: -1
-        return Triple(stdout, stderr, exitCode)
-    }
-
-    /**
-     * 以提升权限打开文件用于读取，返回 PFD。
-     * ShellService 在 Shizuku 进程中打开文件（uid 2000/0），PFD 通过 Binder 传回应用进程。
-     * 应用拿到 PFD 后可用 FileInputStream(fd) 直接读取，无需额外权限。
+     * 以提升权限打开文件用于读取，返回 PFD 给调用方。
+     *
+     * 通过 `newProcess(["cat", path])` 读取，并由本地中继线程把 cat 的 stdout
+     * 泵入一个 pipe 的写端；调用方拿 pipe 的读端。
+     * 中继线程持有 IRemoteProcess 引用，保证复制期间进程不被回收；
+     * 调用方关闭读端 → 中继写端 EPIPE → 线程退出并 destroy 进程。
      */
     fun openForRead(path: String): ParcelFileDescriptor? {
-        val service = shellService
-        if (service != null) {
+        val service = getService() ?: return null
+        val process = try {
+            service.newProcess(arrayOf("cat", path), null, null)
+        } catch (e: Exception) {
+            Log.w(TAG, "openForRead 失败: ${e.message}")
+            null
+        } ?: return null
+
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readEnd = pipe[0]
+        val writeEnd = pipe[1]
+        Thread {
             try {
-                return service.openForRead(path)
-            } catch (e: Exception) {
-                synchronized(bindLock) { shellService = null }
-                Log.w(TAG, "openForRead 失败: ${e.message}，尝试重连")
-                return reconnectAndRetryOpen { it.openForRead(path) }
+                pfdAutoCloseInputStream(process.inputStream).use { src ->
+                    ParcelFileDescriptor.AutoCloseOutputStream(writeEnd).use { dst ->
+                        val buf = ByteArray(128 * 1024)
+                        while (true) {
+                            val n = src.read(buf)
+                            if (n < 0) break
+                            dst.write(buf, 0, n)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { writeEnd.close() } catch (_: Exception) {}
+                try { process.destroy() } catch (_: Exception) {}
             }
-        }
-        ensureBound { /* 后续调用自动走快速路径 */ }
-        return null
+        }.apply { isDaemon = true; name = "shizuku-relay-read" }.start()
+        return readEnd
     }
 
     /**
-     * 以提升权限打开/创建文件用于写入，返回 PFD。
-     * ShellService 在 Shizuku 进程中创建文件（uid 2000/0），PFD 通过 Binder 传回应用进程。
-     * 应用拿到 PFD 后可用 FileOutputStream(fd) 直接写入，无需额外权限。
+     * 以提升权限打开/创建文件用于写入，返回 PFD 给调用方。
+     *
+     * 调用方拿 pipe 的写端；本地中继线程读 pipe 读端并泵入
+     * `newProcess(["sh","-c","cat > path"])` 的 stdin。
+     * 调用方关闭写端 → 中继读到 EOF → 关闭 cat stdin → 线程退出并 destroy 进程。
      */
     fun openForWrite(path: String): ParcelFileDescriptor? {
-        val service = shellService
-        if (service != null) {
-            try {
-                return service.openForWrite(path)
-            } catch (e: Exception) {
-                synchronized(bindLock) { shellService = null }
-                Log.w(TAG, "openForWrite 失败: ${e.message}，尝试重连")
-                return reconnectAndRetryOpen { it.openForWrite(path) }
-            }
-        }
-        ensureBound { /* 后续调用自动走快速路径 */ }
-        return null
-    }
+        val service = getService() ?: return null
+        val escaped = com.whmdg.mczj.tools.util.ShellEscape.escape(path)
+        val process = try {
+            service.newProcess(arrayOf("sh", "-c", "cat > $escaped"), null, null)
+        } catch (e: Exception) {
+            Log.w(TAG, "openForWrite 失败: ${e.message}")
+            null
+        } ?: return null
 
-    /** 断连后重连并重试 open 操作（200ms 超时 × 3 次） */
-    private fun reconnectAndRetryOpen(
-        action: (IShellService) -> ParcelFileDescriptor?
-    ): ParcelFileDescriptor? {
-        for (attempt in 1..3) {
-            if (rebindSync(200)) {
-                val retryService = shellService
-                if (retryService != null) {
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readEnd = pipe[0]
+        val writeEnd = pipe[1]
+        Thread {
+            try {
+                ParcelFileDescriptor.AutoCloseInputStream(readEnd).use { src ->
+                    val dst = android.os.ParcelFileDescriptor.AutoCloseOutputStream(process.outputStream)
                     try {
-                        return action(retryService)
-                    } catch (_: Exception) {
-                        synchronized(bindLock) { shellService = null }
+                        val buf = ByteArray(128 * 1024)
+                        while (true) {
+                            val n = src.read(buf)
+                            if (n < 0) break
+                            dst.write(buf, 0, n)
+                        }
+                        dst.flush()
+                    } finally {
+                        try { dst.close() } catch (_: Exception) {}
                     }
+                    try { process.waitFor() } catch (_: Exception) {}
                 }
+            } catch (_: Exception) {
+            } finally {
+                try { readEnd.close() } catch (_: Exception) {}
+                try { process.destroy() } catch (_: Exception) {}
             }
-        }
-        return null
+        }.apply { isDaemon = true; name = "shizuku-relay-write" }.start()
+        return writeEnd
     }
 
     fun getLastError(): String = lastError
 
     /**
-     * 获取 ShellService 引用（供 CompressService 等需要流式执行的场景）。
-     * 调用前确保 UserService 已绑定（通过 executeCommand 或 ensureBound）。
+     * 采集 Shizuku 侧诊断信息（多行文本），供权限回退弹窗展示。
+     * 包括：服务是否运行、是否已授权、binder 是否存活、Shizuku 后端 UID、
+     * 以及用 Shizuku 通道执行 `id` 的原始结果。
      */
-    fun getShellService(): IShellService? = shellService
-
-    /**
-     * Shizuku 服务是否已启动且本应用已获授权。
-     * 不含 UserService 绑定状态，仅用于判断是否具备走 Shizuku 的前提。
-     */
-    fun isAvailable(): Boolean {
-        return isShizukuServiceRunning() && hasShizukuPermission()
+    fun diagnose(): String = buildString {
+        appendLine("Shizuku 状态：")
+        appendLine("  - 服务运行（pingBinder）: ${isShizukuServiceRunning()}")
+        appendLine("  - 已授权（checkSelfPermission）: ${hasShizukuPermission()}")
+        val binder = try { Shizuku.getBinder() } catch (_: Exception) { null }
+        appendLine("  - binder 存活: ${binder?.isBinderAlive == true}")
+        appendLine("  - Shizuku 后端 UID: ${try { Shizuku.getUid() } catch (e: Exception) { "读取失败: ${e.message}" }}")
+        appendLine("  - 最近错误: ${lastError.ifBlank { "无" }}")
+        appendLine()
+        appendLine("Shizuku 通道执行 id 探针：")
+        append(
+            try {
+                val (out, err, code) = executeCommand("id")
+                "  - 退出码: $code\n  - stdout: ${out.trim().ifBlank { "（空）" }}\n  - stderr: ${err.trim().ifBlank { "（空）" }}"
+            } catch (e: Exception) {
+                "  - 探针失败: ${e.message}"
+            }
+        )
     }
 
-    /**
-     * 确保 UserService 已绑定，必要时同步等待绑定完成。
-     * @return true 表示已就绪可执行命令
-     */
-    fun awaitUserService(timeoutMs: Long = 2000): Boolean {
-        if (shellService != null) return true
-        if (!isAvailable()) return false
-        return rebindSync(timeoutMs)
+    /** 在独立线程读取 PFD 全文，返回携带结果的 Future；pfd 为空时返回空串。 */
+    private fun readAsync(pfd: ParcelFileDescriptor?): java.util.concurrent.Future<String> {
+        val future = java.util.concurrent.FutureTask {
+            if (pfd == null) "" else try {
+                pfdAutoCloseInputStream(pfd).bufferedReader().use { it.readText() }
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        Thread(future, "shizuku-read").apply { isDaemon = true }.start()
+        return future
     }
+
+    private fun pfdAutoCloseInputStream(pfd: ParcelFileDescriptor) =
+        ParcelFileDescriptor.AutoCloseInputStream(pfd)
 }
+
+/**
+ * Shizuku 服务不可用（binder 缺失 / 无权限 / newProcess 失败）。
+ * 由 ShellDaemon 捕获后回退到应用自身权限执行。
+ */
+class ShizukuUnavailableException(message: String) : Exception(message)

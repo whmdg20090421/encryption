@@ -64,6 +64,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.whmdg.mczj.tools.auth.Feature
@@ -114,6 +115,21 @@ fun MainAppContainer() {
     var accountingSelectedTab by remember { mutableIntStateOf(0) }
 
     val vaultService = remember { VaultService(context).apply { load() } }
+
+    // ── 权限回退提醒（ADB 不可用 → 应用自身权限时弹窗） ──
+    var permissionFallbackDialog by remember {
+        mutableStateOf<com.whmdg.mczj.tools.ui.MessageDialogData?>(null)
+    }
+    LaunchedEffect(Unit) {
+        com.whmdg.mczj.tools.security.ShellDaemon.fallbackEvents.collect { event ->
+            permissionFallbackDialog = com.whmdg.mczj.tools.ui.MessageDialogData(
+                title = "权限已回退",
+                errorSummary = "ADB（Shizuku）权限不可用，已回退为应用自身权限执行。原因：${event.reason}",
+                command = event.command,
+                output = event.diagnostic
+            )
+        }
+    }
 
     // ── 诊断状态（Debug 模式） ──
     val isDebugMode = remember { isDebugAuth(context) }
@@ -205,6 +221,10 @@ fun MainAppContainer() {
 
     if (encryptionError != null) {
         ErrorDialog(error = encryptionError, onDismiss = { encryptionError = null })
+    }
+
+    permissionFallbackDialog?.let { data ->
+        com.whmdg.mczj.tools.ui.MessageDialog(data = data, onDismiss = { permissionFallbackDialog = null })
     }
 
     var backPressedTime by remember { mutableStateOf(0L) }

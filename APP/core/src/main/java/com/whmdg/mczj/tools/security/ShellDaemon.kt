@@ -1,8 +1,10 @@
 package com.whmdg.mczj.tools.security
 
-import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.topjohnwu.superuser.Shell
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -18,7 +20,7 @@ import kotlin.concurrent.withLock
  * 维护按权限隔离的持久 shell 进程池，避免每次执行命令都 fork。
  *
  * ROOT 权限通过 libsu Shell 执行（正确的 SELinux 上下文 + FLAG_MOUNT_MASTER），
- * ADB/APPLICANT 通过持久 shell 进程执行。
+ * ADB 通过 Shizuku 直连 `newProcess` 执行，APPLICANT 通过持久 shell 进程执行。
  *
  * 协议：通过 stdin 发送命令，stdout 读取到 marker 结束，解析输出和 exit code。
  */
@@ -28,6 +30,56 @@ object ShellDaemon {
     private const val MARKER_SUFFIX = "___"
 
     private val shells = ConcurrentHashMap<Permission, PersistentShell>()
+
+    /**
+     * 权限回退事件：请求 ADB（Shizuku）权限却不可用、实际以应用自身权限执行时发出。
+     * UI 层收集后弹窗提醒，并附诊断信息帮助判断是「ADB 确实不可用」还是「代码/兼容问题」。
+     */
+    data class PermissionFallbackEvent(
+        /** 回退原因 */
+        val reason: String,
+        /** 触发回退的原始命令 */
+        val command: String,
+        /** 诊断信息（应用权限 id、Shizuku 各状态等） */
+        val diagnostic: String
+    )
+
+    private val _fallbackEvents = MutableSharedFlow<PermissionFallbackEvent>(
+        replay = 0,
+        extraBufferCapacity = 1
+    )
+    val fallbackEvents: SharedFlow<PermissionFallbackEvent> = _fallbackEvents.asSharedFlow()
+
+    @Volatile
+    private var lastFallbackNotifiedAt = 0L
+
+    /** 同一会话内 10 秒内的重复回退不再提示，避免批量命令刷屏。 */
+    private const val FALLBACK_THROTTLE_MS = 10_000L
+
+    /**
+     * 报告一次 ADB→APPLICANT 回退，并同步采集诊断信息后发出事件。
+     * 节流：10 秒内只发一次。供 ShellExecutor 的 FD 路径复用。
+     */
+    internal fun reportFallback(reason: String, command: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastFallbackNotifiedAt < FALLBACK_THROTTLE_MS) return
+        lastFallbackNotifiedAt = now
+
+        val applicantId = try {
+            executeInShell(getOrCreateShell(Permission.APPLICANT), "id", Permission.APPLICANT).trim()
+        } catch (e: Exception) {
+            "执行 id 失败: ${e.message}"
+        }
+        val diagnostic = buildString {
+            appendLine("回退通道（应用权限）id：")
+            appendLine(applicantId)
+            appendLine()
+            append(ShizukuAuthorizer.diagnose())
+        }
+        _fallbackEvents.tryEmit(
+            PermissionFallbackEvent(reason = reason, command = command, diagnostic = diagnostic)
+        )
+    }
 
     /**
      * 持久 shell 进程。
@@ -58,20 +110,19 @@ object ShellDaemon {
     }
 
     /**
-     * 通过 Shizuku UserService（uid 2000）执行命令。
-     * Shizuku 不可用或 UserService 始终无法绑定时，回退到应用自身权限（APPLICANT）。
-     * 下次需由用户在设置中手动切换权限级别。
+     * 通过 Shizuku 直连 `newProcess`（uid 2000 / 0）执行命令。
+     * 无阻塞式绑定：不会等待 UserService，直接读取缓存 binder。
+     * Shizuku 不可用时回退到应用自身权限（APPLICANT）。
      */
     private fun executeViaShizuku(command: String, permission: Permission): String {
-        if (!ShizukuAuthorizer.isAvailable()) {
-            Log.w(TAG, "Shizuku 不可用，回退到应用自身权限执行")
+        val result = try {
+            ShizukuAuthorizer.executeCommand(command)
+        } catch (e: ShizukuUnavailableException) {
+            Log.w(TAG, "Shizuku 不可用（${e.message}），回退到应用自身权限执行")
+            reportFallback(e.message ?: "Shizuku 不可用", command)
             return executeInShell(getOrCreateShell(Permission.APPLICANT), command, permission)
         }
-        if (!ShizukuAuthorizer.awaitUserService(2000)) {
-            Log.w(TAG, "Shizuku UserService 未就绪，回退到应用自身权限执行")
-            return executeInShell(getOrCreateShell(Permission.APPLICANT), command, permission)
-        }
-        val (stdout, stderr, exitCode) = ShizukuAuthorizer.executeCommand(command)
+        val (stdout, stderr, exitCode) = result
         if (exitCode != 0) {
             throw ShellException(
                 message = "命令执行失败",
@@ -85,9 +136,8 @@ object ShellDaemon {
     }
 
     /**
-     * 通过 Shizuku UserService（uid 2000）流式执行命令。
-     * 用 PFD 管道把服务端输出实时回传给调用方逐行回调。
-     * Shizuku 不可用或 UserService 未就绪时，回退到应用自身权限执行。
+     * 通过 Shizuku 直连 `newProcess` 流式执行命令。
+     * Shizuku 不可用时回退到应用自身权限执行。
      */
     private fun executeStreamingViaShizuku(
         command: String,
@@ -96,57 +146,19 @@ object ShellDaemon {
         onOutputLine: (String) -> Unit,
         cancelFlag: AtomicBoolean?
     ) {
-        if (!ShizukuAuthorizer.isAvailable()) {
-            Log.w(TAG, "Shizuku 不可用，回退到应用自身权限流式执行")
+        val exitCode = try {
+            ShizukuAuthorizer.executeStreaming(command, useStderr, cancelFlag, onOutputLine)
+        } catch (e: ShizukuUnavailableException) {
+            Log.w(TAG, "Shizuku 不可用（${e.message}），回退到应用自身权限流式执行")
+            reportFallback(e.message ?: "Shizuku 不可用", command)
             executeStreamingApplicant(command, permission, useStderr, onOutputLine, cancelFlag)
             return
         }
-        if (!ShizukuAuthorizer.awaitUserService(2000)) {
-            Log.w(TAG, "Shizuku UserService 未就绪，回退到应用自身权限流式执行")
-            executeStreamingApplicant(command, permission, useStderr, onOutputLine, cancelFlag)
-            return
-        }
-
-        val pipe = ParcelFileDescriptor.createPipe()
-        val readFd = pipe[0]
-        val writeFd = pipe[1]
-        val readerThread = Thread {
-            try {
-                ParcelFileDescriptor.AutoCloseInputStream(readFd).bufferedReader().use { reader ->
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        if (cancelFlag?.get() == true) break
-                        onOutputLine(line!!)
-                    }
-                }
-            } catch (_: Exception) {
-            } finally {
-                try { readFd.close() } catch (_: Exception) {}
-            }
-        }
-        readerThread.start()
-
-        var result: Triple<String, String, Int>? = null
-        var failure: Exception? = null
-        try {
-            result = if (useStderr) ShizukuAuthorizer.executeStreamingStderr(command, writeFd)
-            else ShizukuAuthorizer.executeStreamingStdout(command, writeFd)
-        } catch (e: Exception) {
-            failure = e
-        } finally {
-            try { writeFd.close() } catch (_: Exception) {}
-        }
-
-        try { readerThread.join(5000) } catch (_: InterruptedException) {}
-
-        failure?.let { throw it }
-        val (_, stderr, exitCode) = result!!
         if (exitCode != 0) {
             throw ShellException(
                 message = "流式命令执行失败",
                 command = command,
                 permission = permission,
-                stderr = stderr,
                 exitCode = exitCode
             )
         }

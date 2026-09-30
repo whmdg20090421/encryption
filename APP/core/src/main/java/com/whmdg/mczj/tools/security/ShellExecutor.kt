@@ -333,14 +333,11 @@ object ShellExecutor {
                 ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
             }
             Permission.ADB -> {
-                if (isShizukuAvailable()) {
-                    ShizukuAuthorizer.openForRead(path)
-                        ?: throw ShellException(
-                            message = "Shizuku 打开文件失败",
-                            command = "openForRead($path)",
-                            permission = permission
-                        )
+                val pfd = if (isShizukuAvailable()) ShizukuAuthorizer.openForRead(path) else null
+                if (pfd != null) {
+                    pfd
                 } else {
+                    ShellDaemon.reportFallback("Shizuku 打开文件失败（openForRead）", "openForRead $path")
                     ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
                 }
             }
@@ -383,14 +380,11 @@ object ShellExecutor {
                 )
             }
             Permission.ADB -> {
-                if (isShizukuAvailable()) {
-                    ShizukuAuthorizer.openForWrite(path)
-                        ?: throw ShellException(
-                            message = "Shizuku 创建文件失败",
-                            command = "openForWrite($path)",
-                            permission = permission
-                        )
+                val pfd = if (isShizukuAvailable()) ShizukuAuthorizer.openForWrite(path) else null
+                if (pfd != null) {
+                    pfd
                 } else {
+                    ShellDaemon.reportFallback("Shizuku 创建文件失败（openForWrite）", "openForWrite $path")
                     ParcelFileDescriptor.open(
                         File(path),
                         ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_WRITE_ONLY
