@@ -85,12 +85,7 @@ object CryptoService {
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         cancelFlag: AtomicBoolean? = null
     ): File {
-        val originalName = if (session.record.encryptFilename) {
-            require(srcFile.name.toByteArray(Charsets.UTF_8).size <= FilenameCodec.MAX_PLAINTEXT_BYTES) {
-                "文件名过长，无法加密：${srcFile.name}"
-            }
-            srcFile.name
-        } else null
+        val originalName = if (session.record.encryptFilename) srcFile.name else null
         val outName = if (session.record.encryptFilename) {
             FilenameCodec.encryptName(srcFile.name, session.dek)
         } else {

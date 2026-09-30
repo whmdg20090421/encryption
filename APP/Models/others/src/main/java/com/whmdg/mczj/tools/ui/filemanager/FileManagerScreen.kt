@@ -6287,8 +6287,8 @@ private fun FastScrollBar(
         }
     }
 
-    val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0.05f, 1f)
-    val thumbHeightPx = (trackHeight * visibleFraction).coerceAtLeast(48f)
+    val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0.10f, 0.50f)
+    val thumbHeightPx = trackHeight * visibleFraction
     val barColor = MaterialTheme.colorScheme.primary
 
     Box(
