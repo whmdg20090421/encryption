@@ -154,6 +154,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
