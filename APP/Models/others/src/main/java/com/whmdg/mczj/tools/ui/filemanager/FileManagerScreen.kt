@@ -150,7 +150,11 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -378,6 +382,10 @@ fun FileManagerScreen(
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    // ── 路径栏手动输入（点击标题进入编辑，回车跳转） ──
+    var isEditingPath by remember { mutableStateOf(false) }
+    var pathInput by remember { mutableStateOf("") }
+    val pathFocusRequester = remember { FocusRequester() }
     var showFontSizeDialog by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
@@ -838,6 +846,7 @@ fun FileManagerScreen(
         onDispose {}
     }
 
+
     // 返回手势：栈顶弹窗 → 关闭，云盘 → 回上一级或退出，压缩包 → 回上一级或退出，回收站 → 回上一级或退出，保险箱内 → 逐级返回，根目录时提示密钥销毁，普通子目录 → 回上一级，主目录 → 退出
     BackHandler {
         if (overlayStack.isNotEmpty()) {
@@ -876,6 +885,13 @@ fun FileManagerScreen(
 
     val currentPath = vm.currentPath
 
+    // 进入路径编辑态后自动聚焦并弹出输入法
+    LaunchedEffect(isEditingPath) {
+        if (isEditingPath) pathFocusRequester.requestFocus()
+    }
+    // 路径编辑态下返回手势：退出编辑而不执行返回上级/退出
+    BackHandler(enabled = isEditingPath) { isEditingPath = false }
+
     Scaffold(
         topBar = {
             Surface(
@@ -884,6 +900,11 @@ fun FileManagerScreen(
             ) {
                 TopAppBar(
                     title = {
+                        // 仅普通文件系统模式允许手动输入路径跳转
+                        val titleEditable = !vm.isInArchiveMode &&
+                            vm.recycleBinPanel != vm.focusedPanel &&
+                            !(vm.panels.isCloudMode && vm.focusedPanel == FocusedPanel.LEFT) &&
+                            !vm.isVaultMode && !vm.isWebDavMode
                         val titleText = when {
                             vm.isInArchiveMode -> vm.archiveSession?.let { session ->
                                 val archivePath = session.archivePath
@@ -899,10 +920,50 @@ fun FileManagerScreen(
                             }
                             else -> currentPath
                         }
-                        StartEllipsisText(
-                            text = titleText,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        if (isEditingPath) {
+                            TextField(
+                                value = pathInput,
+                                onValueChange = { pathInput = it },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(pathFocusRequester),
+                                textStyle = MaterialTheme.typography.titleMedium,
+                                placeholder = { Text("输入绝对路径", style = MaterialTheme.typography.titleMedium) },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                keyboardActions = KeyboardActions(
+                                    onGo = {
+                                        isEditingPath = false
+                                        vm.jumpToPath(pathInput)
+                                        vm.pathJumpError?.let { err ->
+                                            messageDialogData = com.whmdg.mczj.tools.ui.MessageDialogData(
+                                                title = "无法跳转",
+                                                errorSummary = err
+                                            )
+                                            vm.pathJumpError = null
+                                        }
+                                    }
+                                ),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+                                )
+                            )
+                        } else {
+                            StartEllipsisText(
+                                text = titleText,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (titleEditable) Modifier.clickable {
+                                            pathInput = currentPath
+                                            isEditingPath = true
+                                        } else Modifier
+                                    )
+                            )
+                        }
                     },
                     navigationIcon = {
                         IconButton(onClick = { showDrawer = true }) {

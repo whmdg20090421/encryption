@@ -3557,6 +3557,62 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         focusedController.navigateTo(path, onComplete, onPathChanged = { checkVaultPanelExit(focusedController) })
     }
 
+    /** 手动输入路径跳转的错误信息（非空时由 UI 弹窗展示；跳转失败时原路径保持不变） */
+    var pathJumpError by mutableStateOf<String?>(null)
+
+    /**
+     * 手动输入路径跳转。
+     *
+     * 校验通过则导航到目标目录；失败时保持原路径不变，并通过 [pathJumpError] 返回错误：
+     * 能明确区分的场景给中文提示，无法归类时直接抛出原始报错文本。
+     */
+    fun jumpToPath(rawInput: String) {
+        val input = rawInput.trim()
+        if (input.isEmpty()) {
+            pathJumpError = "路径不能为空"
+            return
+        }
+        if (input != "/" && !input.startsWith("/")) {
+            pathJumpError = "请输入以 / 开头的绝对路径"
+            return
+        }
+        // 仅常规文件系统模式支持手动路径跳转
+        if (isVaultMode) { pathJumpError = "保险箱模式下不支持手动输入路径跳转"; return }
+        if (currentPanel.isInArchiveMode) { pathJumpError = "压缩包模式下不支持手动输入路径跳转"; return }
+        if (isWebDavMode) { pathJumpError = "WebDAV 模式下不支持手动输入路径跳转"; return }
+        if (recycleBinPanel == focusedPanel) { pathJumpError = "回收站模式下不支持手动输入路径跳转"; return }
+
+        val normalized = if (input == "/") "/" else input.trimEnd('/')
+
+        if (hasShellEngine) {
+            // 用一条命令区分「目录 / 文件 / 不存在」，shell 自身失败则透传原始报错
+            val escaped = ShellEscape.escape(normalized)
+            val cmd = "if [ -d $escaped ]; then echo D; elif [ -e $escaped ]; then echo F; else echo N; fi"
+            val result = try {
+                ShellExecutor.execute(Permission.MAX, cmd).trim()
+            } catch (e: ShellException) {
+                pathJumpError = e.message ?: e.toString()
+                return
+            } catch (e: Exception) {
+                pathJumpError = e.message ?: e.toString()
+                return
+            }
+            when (result) {
+                "D" -> navigateTo(normalized)
+                "F" -> pathJumpError = "该路径不是文件夹：$normalized"
+                else -> pathJumpError = "路径不存在：$normalized"
+            }
+        } else {
+            val dir = File(normalized)
+            when {
+                !dir.exists() -> pathJumpError = "路径不存在：$normalized"
+                !dir.isDirectory -> pathJumpError = "该路径不是文件夹：$normalized"
+                !dir.canRead() -> pathJumpError = "权限不足，无法读取该路径：$normalized"
+                else -> navigateTo(normalized)
+            }
+        }
+    }
+
     /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
     var pendingSymlinkEntry by mutableStateOf<FileEntry?>(null)
 
