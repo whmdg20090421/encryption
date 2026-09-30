@@ -1052,7 +1052,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             }
 
             // 2. 迁移设置（SharedPreferences → settings 表）
-            val prefs = context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+            val prefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_ACCOUNTING)
             val iconColor = prefs.getString(AppDataPaths.PREF_KEY_ICON_COLOR, null)
             if (iconColor != null && getSetting("category_icon_color") == null) {
                 setSetting("category_icon_color", iconColor)
@@ -1079,7 +1079,7 @@ internal class AccountingDatabase private constructor(context: Context) :
                 Log.i(TAG, "已删除旧文件: $name")
             }
         }
-        context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_ACCOUNTING)
             .edit().clear().apply()
     }
 

@@ -54,8 +54,8 @@ object FileManagerPreloader {
 
         preloadJob = CoroutineScope(Dispatchers.IO).launch {
             try {
-                val fmPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
-                val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+                val fmPrefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_FILE_MANAGER)
+                val legacySp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
                 val safeDefault = "/storage/emulated/0"
 
                 val hasShellEngine = SpecialPermissionVerifier.isRootAvailable() ||

@@ -13,7 +13,7 @@ object WebDavServerStore {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
 
     fun getAll(context: Context): List<WebDavServerConfig> {
-        val prefs = context.getSharedPreferences(AppDataPaths.PREFS_WEBDAV_SERVERS, Context.MODE_PRIVATE)
+        val prefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_WEBDAV_SERVERS)
         val saved = prefs.getString(KEY_SERVERS, null) ?: return emptyList()
         return try {
             json.decodeFromString<List<WebDavServerConfig>>(saved)
@@ -39,7 +39,7 @@ object WebDavServerStore {
     }
 
     private fun writeAll(context: Context, list: List<WebDavServerConfig>) {
-        val prefs = context.getSharedPreferences(AppDataPaths.PREFS_WEBDAV_SERVERS, Context.MODE_PRIVATE)
+        val prefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_WEBDAV_SERVERS)
         prefs.edit().putString(KEY_SERVERS, json.encodeToString(list)).apply()
     }
 }

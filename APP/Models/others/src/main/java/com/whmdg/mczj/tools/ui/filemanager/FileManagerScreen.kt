@@ -576,7 +576,7 @@ fun FileManagerScreen(
     val fileOpManagerProgress by FileOperationManager.progress.collectAsState()
 
     // ── 快捷访问 ──
-    val quickAccessPrefs = context.getSharedPreferences(AppDataPaths.PREFS_QUICK_ACCESS, Context.MODE_PRIVATE)
+    val quickAccessPrefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_QUICK_ACCESS)
     val qaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     var quickAccessList by remember {
         val saved = quickAccessPrefs.getString("entries", null)
@@ -2306,7 +2306,7 @@ fun FileManagerScreen(
                             )
                     )
                     // 左侧菜单面板 70%
-                    val drawerPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
+                    val drawerPrefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_FILE_MANAGER)
                     var localExpanded by remember {
                         mutableStateOf(drawerPrefs.getBoolean("drawer_local_expanded", true))
                     }
@@ -3195,7 +3195,7 @@ fun FileManagerScreen(
     // ── 诊断逻辑（仅 Debug 模式） ──
     LaunchedEffect(isDebugMode) {
         if (!isDebugMode) return@LaunchedEffect
-        val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+        val legacySp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
         val permissionLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
 
         if (permissionLevel != "ROOT") {

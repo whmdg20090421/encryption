@@ -145,7 +145,7 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
 
 /** 鉴权调试开关：由 debug_mode SharedPreferences 控制 */
 fun isDebugAuth(ctx: Context): Boolean =
-    ctx.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE)
+    AppDataPaths.prefs(ctx, AppDataPaths.PREFS_RP_HUB)
         .getBoolean("debug_mode", false)
 
 fun featureDisplayName(f: Feature): String = when (f) {

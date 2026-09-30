@@ -24,6 +24,7 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import kotlinx.coroutines.*
 import java.io.File
 import java.time.Instant
+import com.whmdg.mczj.tools.AppDataPaths
 
 /**
  * 云盘面板控制器。
@@ -846,7 +847,7 @@ class CloudPaneController(
             )
 
             // ⑮ 显示同步弹窗 + 初始化状态栏
-            val maxConcurrency = context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+            val maxConcurrency = AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
                 .getInt("max_concurrency", 3)
             state.onCancelUpload = ::cancelUpload
             state.syncTask = SyncTaskState(

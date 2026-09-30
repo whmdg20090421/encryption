@@ -57,7 +57,7 @@ class UsageStatsHelper(private val context: Context) {
         loadAppNameCache().toMutableMap()
     }
     private val prefs by lazy {
-        context.getSharedPreferences(AppDataPaths.PREFS_HOOK, Context.MODE_PRIVATE)
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_HOOK)
     }
 
     companion object {

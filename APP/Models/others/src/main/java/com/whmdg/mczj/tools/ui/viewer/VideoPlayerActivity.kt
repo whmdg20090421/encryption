@@ -52,6 +52,7 @@ import androidx.media3.ui.PlayerView
 import com.whmdg.mczj.tools.others.R
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import java.io.File
+import com.whmdg.mczj.tools.AppDataPaths
 
 /**
  * 独立的视频播放 Activity，与 ViewerActivity（图片 / 文本）并列。
@@ -80,7 +81,7 @@ class VideoPlayerActivity : ComponentActivity() {
 
         val filePath = intent.getStringExtra(EXTRA_FILE_PATH) ?: run { finish(); return }
 
-        val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
+        val isDarkMode = AppDataPaths.prefs(this, AppDataPaths.PREFS_THEME)
             .getBoolean("is_dark_mode", true)
 
         setContent {

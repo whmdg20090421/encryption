@@ -81,7 +81,7 @@ object TeeManager {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        val sp = context.getSharedPreferences(AppDataPaths.PREFS_TEE, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_TEE)
         sp.edit().clear().apply()
     }
 
@@ -99,7 +99,7 @@ object TeeManager {
             val encryptedBytes = cipher.doFinal(password.toString().toByteArray(Charsets.UTF_8))
 
             val encryptedHex = HexCodec.encode(encryptedBytes)
-            val sp = context.getSharedPreferences(AppDataPaths.PREFS_TEE, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_TEE)
             sp.edit().putString("vault_$vaultId", encryptedHex).apply()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -110,7 +110,7 @@ object TeeManager {
      * 判断某个保险箱是否已录入快速解锁密码
      */
     fun isVaultPasswordSaved(context: Context, vaultId: Int): Boolean {
-        val sp = context.getSharedPreferences(AppDataPaths.PREFS_TEE, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_TEE)
         return !sp.getString("vault_$vaultId", null).isNullOrEmpty()
     }
 
@@ -119,7 +119,7 @@ object TeeManager {
      */
     fun getDecryptCipher(context: Context, vaultId: Int): Cipher? {
         return try {
-            val sp = context.getSharedPreferences(AppDataPaths.PREFS_TEE, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_TEE)
             val encryptedHex = sp.getString("vault_$vaultId", null) ?: return null
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
             val privateKey = keyStore.getKey(KEY_ALIAS, null) as PrivateKey
@@ -137,7 +137,7 @@ object TeeManager {
      */
     fun decryptPassword(context: Context, vaultId: Int, authenticatedCipher: Cipher): String? {
         return try {
-            val sp = context.getSharedPreferences(AppDataPaths.PREFS_TEE, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_TEE)
             val encryptedHex = sp.getString("vault_$vaultId", null) ?: return null
             val encryptedBytes = HexCodec.decode(encryptedHex)
             val decryptedBytes = authenticatedCipher.doFinal(encryptedBytes)

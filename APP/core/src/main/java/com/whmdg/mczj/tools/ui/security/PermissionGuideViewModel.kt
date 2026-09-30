@@ -104,7 +104,7 @@ class PermissionGuideViewModel : ViewModel() {
         }
 
         viewModelScope.launch {
-            val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
             sp.edit()
                 .putString("target_permission_level", level.name)
                 .putBoolean("has_completed_guide", true)
@@ -127,7 +127,7 @@ class PermissionGuideViewModel : ViewModel() {
     }
 
     fun resetGuide(context: Context) {
-        val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
         sp.edit().remove("has_completed_guide").apply()
         _uiState.update {
             UiState() // 重置为初始状态
@@ -150,13 +150,13 @@ class PermissionGuideViewModel : ViewModel() {
     companion object {
         /** 检查引导是否已完成 */
         fun isGuideCompleted(context: Context): Boolean {
-            val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
             return sp.getBoolean("has_completed_guide", false)
         }
 
         /** 获取当前已保存的权限级别 */
         fun getSavedLevel(context: Context): AndroidPermissionLevel? {
-            val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
             val levelStr = sp.getString("target_permission_level", null) ?: return null
             return try {
                 AndroidPermissionLevel.valueOf(levelStr)
@@ -176,7 +176,7 @@ class PermissionGuideViewModel : ViewModel() {
             val isValid = validatePermissionLevel(context, savedLevel)
             if (!isValid) {
                 // 权限已失效，降级到 STANDARD
-                val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+                val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
                 sp.edit().putString("target_permission_level", AndroidPermissionLevel.STANDARD.name).apply()
                 return true
             }

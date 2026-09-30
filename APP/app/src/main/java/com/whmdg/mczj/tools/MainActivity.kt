@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            val themePrefs = remember { getSharedPreferences(AppDataPaths.PREFS_THEME, MODE_PRIVATE) }
+            val themePrefs = remember { AppDataPaths.prefs(this@MainActivity, AppDataPaths.PREFS_THEME) }
 
             // ── 首次启动申请通知权限 ──
             val notifRequested = remember { themePrefs.getBoolean("notif_permission_requested", false) }

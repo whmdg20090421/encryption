@@ -89,6 +89,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
+import com.whmdg.mczj.tools.AppDataPaths
 
 /**
  * 独立的音频播放 Activity，与 VideoPlayerActivity（视频）、ViewerActivity（图片/文本）并列。
@@ -147,7 +148,7 @@ class AudioPlayerActivity : ComponentActivity() {
         val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
         val vaultSessionId = intent.getStringExtra(EXTRA_VAULT_SESSION_ID)
 
-        val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
+        val isDarkMode = AppDataPaths.prefs(this, AppDataPaths.PREFS_THEME)
             .getBoolean("is_dark_mode", true)
 
         setContent {

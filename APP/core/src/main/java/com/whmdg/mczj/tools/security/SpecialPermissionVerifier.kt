@@ -110,7 +110,7 @@ object SpecialPermissionVerifier {
      * 当“非必要时不使用权限”开启时，优先以普通APP沙盒运行，出现权限不足报错时自动套用特权级别重试。
      */
     fun <T> runWithPrivilegeElevation(context: Context, action: () -> T): T {
-        val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
         val target = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
         val useOnlyWhenNecessary = sp.getBoolean("use_only_when_necessary", false)
 

@@ -158,8 +158,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     private var downloadChannel: Channel<PreviewItem>? = null
     private var dirConflictDeferred: CompletableDeferred<DirConflictAction>? = null
 
-    private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
-    private val cachePrefs = application.getSharedPreferences(AppDataPaths.PREFS_FA_CACHE, Context.MODE_PRIVATE)
+    private val prefs = AppDataPaths.prefs(application, AppDataPaths.PREFS_BATCH_DOWNLOADER)
+    private val cachePrefs = AppDataPaths.prefs(application, AppDataPaths.PREFS_FA_CACHE)
 
     companion object {
         private const val FA_BASE = "https://www.furaffinity.net"
@@ -170,7 +170,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         private const val MAX_COOKIE_REFRESH_ATTEMPTS = 3
 
         fun saveCookieStatic(context: Context, cookie: String, username: String = "") {
-            context.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
+            AppDataPaths.prefs(context, AppDataPaths.PREFS_BATCH_DOWNLOADER)
                 .edit()
                 .putString("cookie", cookie)
                 .putString("username", username)
@@ -229,7 +229,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     // ── 作者历史管理 ──
 
-    private val historyPrefs = application.getSharedPreferences(AppDataPaths.PREFS_FA_HISTORY, Context.MODE_PRIVATE)
+    private val historyPrefs = AppDataPaths.prefs(application, AppDataPaths.PREFS_FA_HISTORY)
 
     init {
         // 加载作者历史

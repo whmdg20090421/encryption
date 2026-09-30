@@ -286,7 +286,7 @@ object ShellExecutor {
 
     private fun resolveMaxPermission(): Permission {
         val ctx = requireContext()
-        val sp = ctx.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(ctx, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
         val target = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
 
         return when (target) {

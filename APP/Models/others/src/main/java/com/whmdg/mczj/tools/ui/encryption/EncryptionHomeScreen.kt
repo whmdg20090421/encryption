@@ -577,7 +577,7 @@ fun VaultsListTab(
     var vaultListError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── 保持打开时长（每个保险箱独立） ──
-    val lockPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_VAULT_LOCK, Context.MODE_PRIVATE) }
+    val lockPrefs = remember { AppDataPaths.prefs(context, AppDataPaths.PREFS_VAULT_LOCK) }
     var selectedVault by remember { mutableStateOf<VaultRecord?>(null) }
     // 0 = 立即锁定, 5/15/30/60 = 分钟
     var lockDurationMin by remember { mutableStateOf(0) }

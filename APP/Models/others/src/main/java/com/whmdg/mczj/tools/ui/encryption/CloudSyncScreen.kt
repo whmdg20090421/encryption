@@ -69,6 +69,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import java.io.File
+import com.whmdg.mczj.tools.AppDataPaths
 
 /** 云盘同步项（UI 数据模型 + 持久化字段） */
 data class CloudSyncItem(
@@ -760,7 +761,7 @@ fun CloudSyncScreen(
                     }
                 }
                 val currentConcurrency = remember {
-                    context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+                    AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
                         .getInt("max_concurrency", 3)
                 }
 
@@ -785,7 +786,7 @@ fun CloudSyncScreen(
                         ConcurrencySliderDialog(
                             currentValue = currentConcurrency,
                             onConfirm = { value ->
-                                context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+                                AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
                                     .edit().putInt("max_concurrency", value).apply()
                                 showConcurrencyDialog = false
                             },

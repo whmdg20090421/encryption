@@ -510,13 +510,13 @@ object AccountingRepository {
 
     /** 获取上次使用的账户 ID */
     fun getLastAccountId(context: Context): String? {
-        return context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+        return AppDataPaths.prefs(context, AppDataPaths.PREFS_ACCOUNTING)
             .getString(KEY_LAST_ACCOUNT_ID, null)
     }
 
     /** 保存上次使用的账户 ID */
     fun setLastAccountId(context: Context, accountId: String) {
-        context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_ACCOUNTING)
             .edit().putString(KEY_LAST_ACCOUNT_ID, accountId).apply()
     }
 

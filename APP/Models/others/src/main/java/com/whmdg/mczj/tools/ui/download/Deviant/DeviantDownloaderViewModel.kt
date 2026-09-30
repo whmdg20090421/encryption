@@ -40,7 +40,7 @@ class DeviantDownloaderViewModel(application: Application) : AndroidViewModel(ap
     private var collectJob: Job? = null
     private var isStopped = false
 
-    private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
+    private val prefs = AppDataPaths.prefs(application, AppDataPaths.PREFS_BATCH_DOWNLOADER)
 
     companion object {
         private const val DA_BASE = "https://www.deviantart.com"
@@ -50,7 +50,7 @@ class DeviantDownloaderViewModel(application: Application) : AndroidViewModel(ap
         private const val PAGE_SIZE = 24
 
         fun saveCookieStatic(context: Context, cookie: String) {
-            context.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
+            AppDataPaths.prefs(context, AppDataPaths.PREFS_BATCH_DOWNLOADER)
                 .edit()
                 .putString("deviant_cookie", cookie)
                 .apply()

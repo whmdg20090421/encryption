@@ -18,6 +18,7 @@ import com.whmdg.mczj.tools.util.ShellEscape
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.whmdg.mczj.tools.AppDataPaths
 
 /** 已安装应用的展示信息（列表用，保持轻量） */
 data class AppPackageInfo(
@@ -136,10 +137,7 @@ object AppPackageInfoProvider {
      */
     private fun probeDirExists(context: Context, path: String): Boolean? {
         // Root 需安全设置中选定 Root 档位且 su 真正可用；ADB 以 Shizuku 授权为准
-        val permissionLevel = context.getSharedPreferences(
-            com.whmdg.mczj.tools.AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS,
-            Context.MODE_PRIVATE
-        ).getString("target_permission_level", "NORMAL") ?: "NORMAL"
+        val permissionLevel = AppDataPaths.prefs(context, com.whmdg.mczj.tools.AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS).getString("target_permission_level", "NORMAL") ?: "NORMAL"
         val permission = when {
             permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable() -> Permission.ROOT
             SpecialPermissionVerifier.isShizukuAuthorized(context) -> Permission.ADB

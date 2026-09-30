@@ -41,7 +41,7 @@ data class UsageTimeUiState(
 class UsageTimeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val usageStatsHelper = UsageStatsHelper(application)
-    private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_HOOK, Context.MODE_PRIVATE)
+    private val prefs = AppDataPaths.prefs(application, AppDataPaths.PREFS_HOOK)
     private val packageManager: PackageManager = application.packageManager
 
     private val _uiState = MutableStateFlow(UsageTimeUiState())

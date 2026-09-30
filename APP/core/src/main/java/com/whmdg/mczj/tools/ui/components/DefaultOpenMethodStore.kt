@@ -40,17 +40,29 @@ private data class OpenMethodEntry(
  * （文本→文档编辑、图片→图片、音频→音频、视频→视频、压缩包→压缩包、APK→安装包）。
  * 用户可在「选择打开方式」弹窗中长按某项将其设为默认或取消默认。
  *
- * 数据存于 [AppDataPaths.PREFS_FILE_MANAGER] 的 [AppDataPaths.PREF_KEY_DEFAULT_OPEN_METHODS]。
+ * 存储：通过统一入口 [AppDataPaths.prefs]（[com.whmdg.mczj.tools.AppPrefs]）落盘，
+ * 不使用系统 SharedPreferences。
  */
 object DefaultOpenMethodStore {
 
-    private const val KEY_VERSION = "default_open_methods_version"
     private const val VERSION = 1
+
+    /** AppPrefs 内的键：整张「后缀 → 打开方式」表序列化为一个 JSON 字符串。 */
+    private const val KEY_METHODS = "methods"
+
+    /** AppPrefs 内的键：初始化版本标记。 */
+    private const val KEY_VERSION = "version"
 
     /** APK 归一化 key；`.apk` 与 `.apk.<数字>` 均归一到此。 */
     const val KEY_APK = "apk"
 
+    /** 图片缩略图缓存后缀，与打开路由保持一致（图片候选含 thumb）。 */
+    const val EXT_THUMB = "thumb"
+
     private val json = Json { ignoreUnknownKeys = true }
+
+    private fun prefs(context: Context) =
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_FILE_MANAGER)
 
     /** 由文件名得到配置 key。APK（含 `.apk.N`）归一为 [KEY_APK]，其余取小写后缀。 */
     fun keyFor(fileName: String): String {
@@ -60,19 +72,20 @@ object DefaultOpenMethodStore {
 
     /** 首次运行写入内置后缀的默认值；已初始化则跳过。 */
     fun ensureInitialized(context: Context) {
-        val prefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
-        if (prefs.getInt(KEY_VERSION, 0) >= VERSION) return
+        val p = prefs(context)
+        if (p.getInt(KEY_VERSION, 0) >= VERSION) return
 
         val defaults = mutableMapOf<String, OpenMethodEntry>()
         for (ext in TEXT_EXTENSIONS) defaults[ext] = inEntry(BuiltInOpenMethod.DOCUMENT)
-        for (ext in IMAGE_EXTENSIONS) defaults[ext] = inEntry(BuiltInOpenMethod.IMAGE)
+        // 图片：与 openByBuiltIn(IMAGE) 的匹配口径一致（含 thumb 缩略图后缀）
+        for (ext in IMAGE_EXTENSIONS + EXT_THUMB) defaults[ext] = inEntry(BuiltInOpenMethod.IMAGE)
         for (ext in AUDIO_EXTENSIONS) defaults[ext] = inEntry(BuiltInOpenMethod.AUDIO)
         for (ext in VIDEO_EXTENSIONS) defaults[ext] = inEntry(BuiltInOpenMethod.VIDEO)
         for (ext in ARCHIVE_EXTENSIONS) defaults[ext] = inEntry(BuiltInOpenMethod.ARCHIVE)
         defaults[KEY_APK] = inEntry(BuiltInOpenMethod.APK)
 
-        prefs.edit()
-            .putString(AppDataPaths.PREF_KEY_DEFAULT_OPEN_METHODS, json.encodeToString(defaults))
+        p.edit()
+            .putString(KEY_METHODS, json.encodeToString(defaults))
             .putInt(KEY_VERSION, VERSION)
             .apply()
     }
@@ -99,8 +112,7 @@ object DefaultOpenMethodStore {
     }
 
     private fun read(context: Context): Map<String, OpenMethodEntry> {
-        val prefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
-        val raw = prefs.getString(AppDataPaths.PREF_KEY_DEFAULT_OPEN_METHODS, null) ?: return emptyMap()
+        val raw = prefs(context).getString(KEY_METHODS, null) ?: return emptyMap()
         return try {
             json.decodeFromString<Map<String, OpenMethodEntry>>(raw)
         } catch (_: Exception) {
@@ -109,10 +121,7 @@ object DefaultOpenMethodStore {
     }
 
     private fun write(context: Context, map: Map<String, OpenMethodEntry>) {
-        context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
-            .edit()
-            .putString(AppDataPaths.PREF_KEY_DEFAULT_OPEN_METHODS, json.encodeToString(map))
-            .apply()
+        prefs(context).putString(KEY_METHODS, json.encodeToString(map))
     }
 
     private fun inEntry(method: BuiltInOpenMethod) = OpenMethodEntry(type = "in", method = method.name)

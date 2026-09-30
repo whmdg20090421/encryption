@@ -3050,7 +3050,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private val context: Context get() = getApplication()
 
     // ── 引擎 & 权限 ──
-    private val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+    private val legacySp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
     val isRootEngine: Boolean
     private val permissionLevel: String
     /** 当前是否有可用的 shell 引擎（Root/libsu 或 Shizuku/ADB） */
@@ -3058,7 +3058,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         get() = isRootEngine || SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
 
     // ── 文件管理器偏好 ──
-    private val fmPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
+    private val fmPrefs = AppDataPaths.prefs(context, AppDataPaths.PREFS_FILE_MANAGER)
     private val safeDefault = "/storage/emulated/0"
 
     // ── 面板控制器实例（沙箱，各自独立） ──

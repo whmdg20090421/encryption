@@ -19,12 +19,12 @@ object EncryptionTraceLog {
     private const val PREF_KEY = "encryption_trace_log"
 
     fun enabled(context: Context): Boolean {
-        return context.getSharedPreferences(AppDataPaths.PREFS_ENCRYPTION, Context.MODE_PRIVATE)
+        return AppDataPaths.prefs(context, AppDataPaths.PREFS_ENCRYPTION)
             .getBoolean(PREF_KEY, false)
     }
 
     fun setEnabled(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(AppDataPaths.PREFS_ENCRYPTION, Context.MODE_PRIVATE)
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_ENCRYPTION)
             .edit().putBoolean(PREF_KEY, enabled).apply()
     }
 

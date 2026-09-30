@@ -13,19 +13,37 @@ import java.io.File
  * 结构：
  * ```
  * {filesDir}/艨艟战舰工具箱数据/
- * ├── 文件管理器/     ← file_manager_prefs / 缓存等
+ * ├── 全局设置/       ← 不属于任何模块的全局键值配置（AppPrefs）与标记
+ * ├── 文件管理器/     ← 缓存 / 密码本等
  * ├── 加密模块/       ← vault 相关
  * ├── 安全设置/       ← 权限 / root 引擎等
  * └── 批量下载器/
  * ```
  *
- * SharedPreferences 虽由 Android 系统管理（internal shared_prefs/），
- * 但命名上也按此模块分层，一一对应。
+ * ## 强制数据存储规范（必须遵守）
+ *
+ * 1. **唯一合法根目录**：应用所有本地持久化数据（配置、缓存、标记、索引……）
+ *    只允许写入本对象 [root] 返回的目录树 `{filesDir}/艨艟战舰工具箱数据/` 之下。
+ * 2. **根目录下只允许存在文件夹**：`{filesDir}/艨艟战舰工具箱数据/` 下不得直接出现任何
+ *    文件，必须归入某个子目录（模块目录，或不属于模块的全局数据用 [globalSettings]）。
+ * 3. **严禁使用系统 SharedPreferences**：`/data/data/<包名>/shared_prefs/` 属于禁区。
+ *    禁止调用 `Context.getSharedPreferences(...)`。
+ * 4. **键值配置统一走 [AppPrefs]**：需要「键值对 / 小配置」时，用 [prefs] 取得
+ *    [AppPrefs] 实例，**不要**新建 SharedPreferences，也不要自己拼路径写文件。
+ *    全项目检索 `getSharedPreferences` 应无任何结果；检索 `AppPrefs` 即为全部合规调用。
+ * 5. **禁止硬编码路径与名称**：任何目录名、文件名、配置名都必须在本对象中以常量或
+ *    方法的形式集中定义后再引用，调用方不得写死字符串。
  */
 object AppDataPaths {
 
     private const val DIR_NAME = "艨艟战舰工具箱数据"
     private var migrated = false
+
+    /** 全局设置目录名（不属于任何模块的全局 [AppPrefs] 配置与标记落盘于此）。 */
+    private const val GLOBAL_SETTINGS_DIR_NAME = "全局设置"
+
+    /** 进程内 [AppPrefs] 实例缓存，保证同名配置返回同一对象。 */
+    private val prefsCache = java.util.concurrent.ConcurrentHashMap<String, AppPrefs>()
 
     /** 统一数据根目录（内部存储，不可被其他应用访问） */
     fun root(context: Context): File {
@@ -40,12 +58,76 @@ object AppDataPaths {
         return dir
     }
 
+    /**
+     * 全局设置目录：`{统一根}/全局设置/`。
+     *
+     * 存放**不属于任何模块**的全局 [AppPrefs] 配置（如主题、认证 Token、TEE）与各类迁移标记。
+     */
+    fun globalSettings(context: Context): File {
+        val dir = File(root(context), GLOBAL_SETTINGS_DIR_NAME)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /**
+     * 取得某名称的受管键值配置（替代系统 `SharedPreferences`）。
+     *
+     * 落盘目录由 [prefsDirFor] 按配置名自动解析到对应模块目录（无归属的走 [globalSettings]），
+     * 即 `{模块目录}/<name>.json`。首次加载时若存在旧 `shared_prefs/<name>.xml`，
+     * 会自动解析导入并删除旧文件（一次性搬家）。
+     *
+     * @param name 配置名（对应 [PREFS_*] 常量），不得硬编码。
+     */
+    fun prefs(context: Context, name: String): AppPrefs {
+        val appContext = context.applicationContext
+        return prefsCache.getOrPut(name) {
+            val file = File(prefsDirFor(appContext, name), "$name.json")
+            val legacy = File(appContext.filesDir.parentFile, "shared_prefs/$name.xml")
+            AppPrefs(file, legacy)
+        }
+    }
+
+    /**
+     * 键值配置的落盘目录：按配置名映射到所属模块目录；没有模块归属的全局配置
+     * （主题、认证 Token、WiFi、Hook 等）统一落到 [globalSettings]。
+     *
+     * 新增 [PREFS_*] 常量时，在此登记其模块归属。
+     */
+    private fun prefsDirFor(context: Context, name: String): File = when (name) {
+        // 文件管理器模块
+        PREFS_FILE_MANAGER, PREFS_QUICK_ACCESS, PREFS_WEBDAV_SERVERS -> fileManager(context)
+        // 加密模块
+        PREFS_ENCRYPTION, PREFS_VAULT_LOCK -> encryption(context)
+        // 批量下载器模块
+        PREFS_BATCH_DOWNLOADER, PREFS_FA_CACHE, PREFS_FA_HISTORY -> batchDownloader(context)
+        // RP-Hub 模块
+        PREFS_RP_HUB -> rpHub(context)
+        // 记账本模块
+        PREFS_ACCOUNTING -> accounting(context)
+        // 云盘模块
+        PREFS_CLOUD_SYNC, PREFS_CLOUD_SYNC_SETTINGS -> cloudSync(context)
+        // WiFi 模块
+        PREFS_WIFI_PASSWORDS, PREFS_WIFI_DISCLAIMER -> wifi(context)
+        // Hook 模块
+        PREFS_HOOK -> hook(context)
+        // 安全设置模块（权限 / 特殊权限 / TEE）
+        PREFS_SECURITY, PREFS_LEGACY_SPECIAL_PERMISSIONS,
+        PREFS_PERMISSION_MANAGEMENT, PREFS_TEE -> security(context)
+        // 其余为全局配置（主题、认证 Token、P7zip 守护进程等）
+        else -> globalSettings(context)
+    }
+
+    /** 全局设置目录下的标记文件（如迁移完成标记）。 */
+    private fun globalSettingsMarker(context: Context, name: String): File =
+        File(globalSettings(context), name)
+
     /** 文件管理器模块目录 */
     fun fileManager(context: Context): File {
         val dir = File(root(context), "文件管理器")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
+
 
     /** 压缩包密码本文件（每行一个密码，UTF-8） */
     fun archivePasswordBook(context: Context): File {
@@ -83,6 +165,20 @@ object AppDataPaths {
     /** 云盘同步模块目录 */
     fun cloudSync(context: Context): File {
         val dir = File(root(context), "云盘")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** WiFi 传输模块目录 */
+    fun wifi(context: Context): File {
+        val dir = File(root(context), "WiFi")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** Hook 模块目录 */
+    fun hook(context: Context): File {
+        val dir = File(root(context), "Hook")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
@@ -350,9 +446,6 @@ object AppDataPaths {
     /** 文件管理器快捷访问 SharedPreferences */
     const val PREFS_QUICK_ACCESS = "quick_access_prefs"
 
-    /** 「后缀 → 默认打开方式」配置 Key（存于 PREFS_FILE_MANAGER） */
-    const val PREF_KEY_DEFAULT_OPEN_METHODS = "default_open_methods"
-
     /** 安全设置 SharedPreferences（已废弃，统一使用 PREFS_LEGACY_SPECIAL_PERMISSIONS） */
     const val PREFS_SECURITY = "special_permissions"
 
@@ -406,6 +499,9 @@ object AppDataPaths {
 
     /** 云盘同步 SharedPreferences */
     const val PREFS_CLOUD_SYNC = "cloud_sync_prefs"
+
+    /** 云盘同步设置（并发等）；与 PREFS_CLOUD_SYNC 区分 */
+    const val PREFS_CLOUD_SYNC_SETTINGS = "cloud_sync_settings"
 
     /** 云盘操作实时落盘开关 Key（存于 PREFS_CLOUD_SYNC） */
     const val PREF_KEY_CLOUD_OP_LOG = "cloud_op_log_enabled"
@@ -487,8 +583,8 @@ object AppDataPaths {
      * 一次性执行，迁移完成后记录标记。
      */
     private fun migrateScatteredFiles(context: Context) {
-        val prefs = context.getSharedPreferences("app_data_migration", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("scattered_migrated", false)) return
+        val marker = globalSettingsMarker(context, ".scattered_migrated")
+        if (marker.exists()) return
 
         val fd = context.filesDir
         val encDir = File(context.filesDir, "$DIR_NAME/加密模块").apply { mkdirs() }
@@ -505,7 +601,7 @@ object AppDataPaths {
         moveDir(File(fd, "crash_reports"), File(diagDir, "crash_reports"))
         moveDir(File(fd, "debug_logs"), File(diagDir, "debug_logs"))
 
-        prefs.edit().putBoolean("scattered_migrated", true).apply()
+        runCatching { marker.writeText("1") }
         Log.i("AppDataPaths", "散落文件迁移完成")
     }
 
@@ -514,14 +610,14 @@ object AppDataPaths {
      * 独立于 scattered_migrated，因为该文件在后期才加入 AppDataPaths 体系。
      */
     private fun migrateFolderSizeDb(context: Context) {
-        val prefs = context.getSharedPreferences("app_data_migration", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("folder_size_migrated", false)) return
+        val marker = globalSettingsMarker(context, ".folder_size_migrated")
+        if (marker.exists()) return
         val src = File(context.filesDir, "folder_sizes.json")
         if (src.exists()) {
             val dst = File(fileManager(context), "folder_sizes.json")
             if (!dst.exists()) src.renameTo(dst)
         }
-        prefs.edit().putBoolean("folder_size_migrated", true).apply()
+        runCatching { marker.writeText("1") }
     }
 
     private fun moveFile(src: File, dst: File) {

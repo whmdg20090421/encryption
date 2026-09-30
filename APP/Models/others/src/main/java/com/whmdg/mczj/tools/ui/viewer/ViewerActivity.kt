@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import java.io.File
+import com.whmdg.mczj.tools.AppDataPaths
 
 /**
  * 独立的文件浏览 Activity，承载 ImageViewer 和 TextEditor。
@@ -105,7 +106,7 @@ class ViewerActivity : ComponentActivity() {
             vaultSessionId = null
         }
 
-        val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
+        val isDarkMode = AppDataPaths.prefs(this, AppDataPaths.PREFS_THEME)
             .getBoolean("is_dark_mode", true)
 
         setContent {

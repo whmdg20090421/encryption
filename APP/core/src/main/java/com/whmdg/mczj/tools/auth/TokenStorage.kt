@@ -22,7 +22,7 @@ object TokenStorage {
     )
 
     fun load(ctx: Context): Blob? {
-        val sp = ctx.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(ctx, AppDataPaths.PREFS_AUTH_TOKEN)
         val wk = sp.getString(KEY_WK, null) ?: return null
         val ivW = sp.getString(KEY_IV_W, null) ?: return null
         val ct = sp.getString(KEY_CT, null) ?: return null
@@ -40,7 +40,7 @@ object TokenStorage {
     }
 
     fun save(ctx: Context, blob: Blob) {
-        ctx.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE).edit()
+        AppDataPaths.prefs(ctx, AppDataPaths.PREFS_AUTH_TOKEN).edit()
             .putString(KEY_WK, Base64.encodeToString(blob.wrappedKey, Base64.NO_WRAP))
             .putString(KEY_IV_W, Base64.encodeToString(blob.ivWrap, Base64.NO_WRAP))
             .putString(KEY_CT, Base64.encodeToString(blob.cipherToken, Base64.NO_WRAP))
@@ -51,6 +51,6 @@ object TokenStorage {
     }
 
     fun clear(ctx: Context) {
-        ctx.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE).edit().clear().apply()
+        AppDataPaths.prefs(ctx, AppDataPaths.PREFS_AUTH_TOKEN).edit().clear().apply()
     }
 }

@@ -16,7 +16,7 @@ import java.time.format.DateTimeFormatter
  */
 object CloudSyncLogger {
 
-    private const val PREFS_NAME = "cloud_sync_prefs"
+    private const val PREFS_NAME = AppDataPaths.PREFS_CLOUD_SYNC
     private const val KEY_LOG_ENABLED = "cloud_log_enabled"
     private const val MAX_FILE_SIZE = 100 * 1024L // 100KB
 
@@ -28,7 +28,7 @@ object CloudSyncLogger {
     /** 检查日志是否开启 */
     fun isEnabled(context: Context): Boolean {
         return cachedEnabled ?: run {
-            val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val sp = AppDataPaths.prefs(context, PREFS_NAME)
             sp.getBoolean(KEY_LOG_ENABLED, false).also { cachedEnabled = it }
         }
     }
@@ -36,7 +36,7 @@ object CloudSyncLogger {
     /** 设置日志开关 */
     fun setEnabled(context: Context, enabled: Boolean) {
         cachedEnabled = enabled
-        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(context, PREFS_NAME)
         sp.edit().putBoolean(KEY_LOG_ENABLED, enabled).apply()
     }
 

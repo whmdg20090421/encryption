@@ -226,7 +226,7 @@ internal fun DeleteConfirmDialog(
 ) {
     if (!show) return
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, android.content.Context.MODE_PRIVATE) }
+    val prefs = remember { AppDataPaths.prefs(context, AppDataPaths.PREFS_FILE_MANAGER) }
     var recycleBinEnabled by remember { mutableStateOf(prefs.getBoolean("delete_to_recycle_bin", true)) }
     StandardDialog(
         onDismissRequest = onDismiss,

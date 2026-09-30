@@ -406,7 +406,7 @@ private fun PermissionStatusPage(
                     val isValid = PermissionGuideViewModel.validatePermissionLevel(context, viewingLevel)
                     if (isValid) {
                         showSetDialog = false
-                        val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+                        val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
                         sp.edit().putString("target_permission_level", viewingLevel.name).apply()
                         permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
                     } else {
@@ -442,7 +442,7 @@ private fun PermissionStatusPage(
                         if (granted) {
                             showErrorDialog = null
                             // 重新尝试保存
-                            val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+                            val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
                             sp.edit().putString("target_permission_level", viewingLevel.name).apply()
                             permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
                         }

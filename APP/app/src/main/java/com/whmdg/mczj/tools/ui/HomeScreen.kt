@@ -120,7 +120,7 @@ fun MainAppContainer() {
     var startupDiagnostic by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+        val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS)
         val target = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
         if (target != "NORMAL") {
             val isStillValid = when (target) {
@@ -845,8 +845,8 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
 @Composable
 fun FunctionalTestScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE) }
-    val cloudPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_CLOUD_SYNC, Context.MODE_PRIVATE) }
+    val prefs = remember { AppDataPaths.prefs(context, AppDataPaths.PREFS_RP_HUB) }
+    val cloudPrefs = remember { AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC) }
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
     var cloudLogEnabled by remember { mutableStateOf(com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.isEnabled(context)) }
     var cloudOpLogEnabled by remember {

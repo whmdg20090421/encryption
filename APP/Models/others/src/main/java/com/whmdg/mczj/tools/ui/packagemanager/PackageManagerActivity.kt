@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
+import com.whmdg.mczj.tools.AppDataPaths
 
 /**
  * 独立的应用管理 Activity，用于查看已安装应用列表。
@@ -17,7 +18,7 @@ class PackageManagerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
+        val isDarkMode = AppDataPaths.prefs(this, AppDataPaths.PREFS_THEME)
             .getBoolean("is_dark_mode", true)
 
         setContent {

@@ -16,7 +16,7 @@ object CloudSyncStore {
     private const val KEY_SYNC_ITEMS = "sync_items"
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(AppDataPaths.PREFS_CLOUD_SYNC, Context.MODE_PRIVATE)
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC)
 
     /** 加载已保存的同步项列表 */
     fun load(context: Context): List<CloudSyncItem> {

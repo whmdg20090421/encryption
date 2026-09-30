@@ -63,7 +63,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         instance = this
         DiagnosticLog.init(this)
         DiagnosticLog.setOperationLogEnabled(
-            getSharedPreferences(AppDataPaths.PREFS_CLOUD_SYNC, MODE_PRIVATE)
+            AppDataPaths.prefs(this, AppDataPaths.PREFS_CLOUD_SYNC)
                 .getBoolean(AppDataPaths.PREF_KEY_CLOUD_OP_LOG, false)
         )
         ShellExecutor.init(this)

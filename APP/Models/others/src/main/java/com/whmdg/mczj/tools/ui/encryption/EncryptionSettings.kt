@@ -10,7 +10,7 @@ import com.whmdg.mczj.tools.AppDataPaths
  * 加密模块的持久化偏好。
  */
 class EncryptionSettings(context: Context) {
-    private val sp = context.getSharedPreferences(AppDataPaths.PREFS_ENCRYPTION, Context.MODE_PRIVATE)
+    private val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_ENCRYPTION)
 
     var loaded by mutableStateOf(false)
         private set

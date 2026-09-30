@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.IBinder
 import android.util.Log
+import com.whmdg.mczj.tools.AppDataPaths
 
 /**
  * 已支持 hook 的应用注册表。
@@ -169,7 +170,7 @@ object HookConfig {
     // ── L2 功能开关（本地 SharedPreferences） ──
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences("hook_prefs", Context.MODE_PRIVATE)
+        AppDataPaths.prefs(context, AppDataPaths.PREFS_HOOK)
 
     fun isFeatureEnabled(context: Context, packageName: String, feature: HookFeature): Boolean =
         prefs(context).getBoolean("${packageName}_${feature.name}", false)

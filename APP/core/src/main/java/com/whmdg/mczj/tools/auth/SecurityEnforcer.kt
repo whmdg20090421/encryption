@@ -39,7 +39,7 @@ object SecurityEnforcer {
             try {
                 // 清除授权状态
                 // 注意：这里不能调用 suspend 函数，所以直接清除存储
-                val sp = context.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE)
+                val sp = AppDataPaths.prefs(context, AppDataPaths.PREFS_AUTH_TOKEN)
                 sp.edit().clear().apply()
 
                 // 尝试删除 Keystore 密钥
