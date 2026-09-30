@@ -272,6 +272,7 @@ fun TextEditorScreen(
                     setText(fileContent)
                     typefaceText = Typeface.MONOSPACE
                     setWordwrap(wordwrapEnabled)
+                    setDisplayLnPanel(false)
                     if (isDarkMode) colorScheme = SchemeDarcula()
                     setEditorLanguage(
                         if (file.extension.lowercase() in listOf("java", "kt", "kts")) JavaLanguage()
