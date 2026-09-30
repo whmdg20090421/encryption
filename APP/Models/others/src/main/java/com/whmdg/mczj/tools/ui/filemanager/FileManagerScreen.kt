@@ -160,6 +160,9 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -6088,11 +6091,12 @@ private fun FileBrowserPanel(
                 }
             }
 
-            LazyColumn(
-                state = lazyListState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 4.dp)
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = lazyListState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 4.dp)
+                ) {
                 // 独立的"返回上一级"条目，不走 onFolderClick，不记录历史
                 if (parentPath != null) {
                     item(key = "__parent__") {
@@ -6170,6 +6174,97 @@ private fun FileBrowserPanel(
                     )
                 }
             }
+
+                FastScrollBar(
+                    listState = lazyListState,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 面板右侧快速滚动条：显示当前滚动位置，支持拖动连续滚动与点击跳转。
+ * 仅在条目数超出可视区时显示。
+ */
+@Composable
+private fun FastScrollBar(
+    listState: LazyListState,
+    modifier: Modifier = Modifier
+) {
+    val totalItems by remember(listState) {
+        derivedStateOf { listState.layoutInfo.totalItemsCount }
+    }
+    val visibleItems by remember(listState) {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.size }
+    }
+    if (totalItems == 0 || totalItems <= visibleItems) return
+
+    val scope = rememberCoroutineScope()
+    var trackHeight by remember { mutableIntStateOf(0) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    val isScrollInProgress by remember(listState) {
+        derivedStateOf { listState.isScrollInProgress }
+    }
+    val thumbAlpha by animateFloatAsState(
+        targetValue = if (isDragging || isScrollInProgress) 1f else 0.35f,
+        label = "fastScrollAlpha"
+    )
+    val progress by remember(listState) {
+        derivedStateOf {
+            val maxFirst = (totalItems - visibleItems).coerceAtLeast(1)
+            (listState.firstVisibleItemIndex.toFloat() / maxFirst).coerceIn(0f, 1f)
+        }
+    }
+
+    val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0.05f, 1f)
+    val thumbHeightPx = (trackHeight * visibleFraction).coerceAtLeast(48f)
+    val barColor = MaterialTheme.colorScheme.primary
+
+    Box(
+        modifier = modifier
+            .width(18.dp)
+            .onSizeChanged { trackHeight = it.height }
+            .pointerInput(totalItems, visibleItems, trackHeight, thumbHeightPx) {
+                if (trackHeight <= 0) return@pointerInput
+                detectVerticalDragGestures(
+                    onDragStart = { isDragging = true },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false }
+                ) { change, dragAmount ->
+                    change.consume()
+                    val maxScrollPx = (totalItems - visibleItems).coerceAtLeast(0).toFloat()
+                    val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
+                    val deltaScroll = dragAmount / scrollablePx * maxScrollPx
+                    scope.launch { listState.dispatchRawDelta(deltaScroll) }
+                }
+            }
+            .pointerInput(totalItems, visibleItems, trackHeight, thumbHeightPx) {
+                if (trackHeight <= 0) return@pointerInput
+                detectTapGestures { offset ->
+                    val maxFirst = (totalItems - visibleItems).coerceAtLeast(0)
+                    val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
+                    val fraction = ((offset.y - thumbHeightPx / 2f) / scrollablePx)
+                        .coerceIn(0f, 1f)
+                    val targetIndex = (fraction * maxFirst).roundToInt()
+                    scope.launch { listState.animateScrollToItem(targetIndex) }
+                }
+            }
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val barWidth = 4.dp.toPx()
+            val x = (size.width - barWidth) / 2f
+            val thumbTop = progress * (size.height - thumbHeightPx)
+            drawRoundRect(
+                color = barColor.copy(alpha = thumbAlpha),
+                topLeft = Offset(x, thumbTop),
+                size = Size(barWidth, thumbHeightPx),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+            )
         }
     }
 }
