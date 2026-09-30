@@ -285,7 +285,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun loadCachedAuthors() {
-        val allEntries = cachePrefs.all
+        val allEntries = cachePrefs.getAll()
         // 按 author 分组: key 格式为 "author:pageId" 或纯 pageId
         // 为兼容旧格式，先加载所有条目
         val authorMap = mutableMapOf<String, MutableList<Pair<String, String>>>()
@@ -341,7 +341,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun deleteCachedAuthor(author: String) {
-        val allEntries = cachePrefs.all
+        val allEntries = cachePrefs.getAll()
         val editor = cachePrefs.edit()
         for ((key, _) in allEntries) {
             if (key.startsWith("$author/")) {
@@ -1314,7 +1314,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     /** 检查某作者是否有缓存 */
     private fun getAuthorCachedEntries(author: String): List<CachedLinkInfo> {
         val results = mutableListOf<CachedLinkInfo>()
-        for ((key, value) in cachePrefs.all) {
+        for ((key, value) in cachePrefs.getAll()) {
             if (value is String && key.startsWith("$author/")) {
                 val pageId = key.removePrefix("$author/")
                 val (title, url) = parseCacheValue(value)
