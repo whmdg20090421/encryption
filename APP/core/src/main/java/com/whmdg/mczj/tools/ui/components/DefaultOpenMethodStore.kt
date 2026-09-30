@@ -121,7 +121,7 @@ object DefaultOpenMethodStore {
     }
 
     private fun write(context: Context, map: Map<String, OpenMethodEntry>) {
-        prefs(context).putString(KEY_METHODS, json.encodeToString(map))
+        prefs(context).edit().putString(KEY_METHODS, json.encodeToString(map)).apply()
     }
 
     private fun inEntry(method: BuiltInOpenMethod) = OpenMethodEntry(type = "in", method = method.name)

@@ -4,6 +4,7 @@ import android.util.Xml
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -233,7 +234,7 @@ class AppPrefs internal constructor(
         is Boolean -> typed("b", v)
         is Set<*> -> buildJsonObject {
             put("t", "ss")
-            put("v", buildJsonArray { for (item in v) add(item?.toString() ?: "") })
+            put("v", buildJsonArray { for (item in v) add(JsonPrimitive(item?.toString() ?: "")) })
         }
         else -> null
     }
