@@ -6211,7 +6211,11 @@ private fun FastScrollBar(
         derivedStateOf { listState.isScrollInProgress }
     }
     val thumbAlpha by animateFloatAsState(
-        targetValue = if (isDragging || isScrollInProgress) 1f else 0.35f,
+        targetValue = when {
+            isDragging -> 0.7f
+            isScrollInProgress -> 0.4f
+            else -> 0f
+        },
         label = "fastScrollAlpha"
     )
     val progress by remember(listState) {
@@ -6227,7 +6231,7 @@ private fun FastScrollBar(
 
     Box(
         modifier = modifier
-            .width(18.dp)
+            .width(12.dp)
             .onSizeChanged { trackHeight = it.height }
             .pointerInput(totalItems, visibleItems, trackHeight, thumbHeightPx) {
                 if (trackHeight <= 0) return@pointerInput
