@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -19,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -27,11 +30,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.whmdg.mczj.tools.AppDataPaths
@@ -39,6 +47,7 @@ import com.whmdg.mczj.tools.ui.AppNavigation
 import com.whmdg.mczj.tools.ui.components.AppInfoDialog
 import com.whmdg.mczj.tools.ui.components.AppInfoRowData
 import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
+import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.util.FormatUtils
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.launch
@@ -49,6 +58,12 @@ import kotlin.coroutines.resume
 
 /** 用户应用少于该数量时，判定为应用列表读取被系统拦截 */
 private const val USER_APP_BLOCKED_THRESHOLD = 10
+
+/** 安装包列表排序字段 */
+private enum class PackageSortField { PACKAGE, NAME, SIZE, UPDATE_TIME }
+
+private const val PREF_KEY_SORT_FIELD = "package_sort_field"
+private const val PREF_KEY_SORT_REVERSE = "package_sort_reverse"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,9 +79,63 @@ fun PackageManagerScreen(onBack: () -> Unit) {
     var showBlockedDialog by remember { mutableStateOf(false) }
     var selectedApp by remember { mutableStateOf<AppPackageInfo?>(null) }
 
+    // 搜索态：进入后标题替换为输入框，工具栏图标变为叉叉
+    var isSearching by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    val searchFocusRequester = remember { FocusRequester() }
+
+    // 排序偏好（持久化到 AppDataPaths.PREFS_PACKAGE_MANAGER）
+    val sortPrefs = remember { AppDataPaths.prefs(context, AppDataPaths.PREFS_PACKAGE_MANAGER) }
+    var sortField by remember {
+        mutableStateOf(
+            runCatching { PackageSortField.valueOf(sortPrefs.getString(PREF_KEY_SORT_FIELD, null) ?: "") }
+                .getOrDefault(PackageSortField.UPDATE_TIME)
+        )
+    }
+    var sortReverse by remember { mutableStateOf(sortPrefs.getBoolean(PREF_KEY_SORT_REVERSE, false)) }
+
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showSortDialog by remember { mutableStateOf(false) }
+    var tempSortField by remember { mutableStateOf(sortField) }
+    var tempSortReverse by remember { mutableStateOf(sortReverse) }
+
     val onlySystem = selectedTab == 1
     val currentApps = if (onlySystem) systemApps else userApps
     val isLoading = currentApps == null
+
+    // 退出搜索：清空查询词并恢复工具栏
+    val exitSearch = {
+        isSearching = false
+        searchQuery = ""
+    }
+
+    // 先按查询词过滤，再按排序字段/方向排序；查询词为空则仅排序
+    val displayedApps = remember(currentApps, searchQuery, sortField, sortReverse) {
+        val list = currentApps ?: emptyList()
+        val searched = searchQuery.takeIf { it.isNotEmpty() }
+            ?.let { q ->
+                list.filter {
+                    it.appName.contains(q, ignoreCase = true) ||
+                        it.packageName.contains(q, ignoreCase = true)
+                }
+            } ?: list
+        // 默认方向：包名/名称 A→Z，大小 大到小，更新时间 新到旧
+        val sorted = when (sortField) {
+            PackageSortField.PACKAGE -> searched.sortedBy { it.packageName.lowercase() }
+            PackageSortField.NAME -> searched.sortedBy { it.appName.lowercase() }
+            PackageSortField.SIZE -> searched.sortedByDescending { it.totalSize }
+            PackageSortField.UPDATE_TIME -> searched.sortedByDescending { it.lastUpdateTime }
+        }
+        if (sortReverse) sorted.reversed() else sorted
+    }
+
+    // 虚拟返回手势：搜索态下等同于点击叉叉
+    BackHandler(enabled = isSearching) { exitSearch() }
+
+    // 进入搜索态后自动聚焦并弹出输入法
+    LaunchedEffect(isSearching) {
+        if (isSearching) searchFocusRequester.requestFocus()
+    }
 
     // 首次进入当前标签且无缓存时才加载；切换标签命中缓存则直接复用
     LaunchedEffect(selectedTab) {
@@ -87,18 +156,80 @@ fun PackageManagerScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("安装包提取") },
+                title = {
+                    if (isSearching) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester),
+                            placeholder = { Text("搜索应用名称或包名") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "清除")
+                                    }
+                                }
+                            },
+                            singleLine = true
+                        )
+                    } else {
+                        Text("安装包提取")
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.Search, contentDescription = "搜索")
+                    IconButton(
+                        onClick = {
+                            if (isSearching) exitSearch() else isSearching = true
+                        }
+                    ) {
+                        Icon(
+                            if (isSearching) Icons.Default.Close else Icons.Default.Search,
+                            contentDescription = if (isSearching) "退出搜索" else "搜索"
+                        )
                     }
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                    Box {
+                        IconButton(onClick = { showSortMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                        }
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("排序方式") },
+                                trailingIcon = {
+                                    val fieldLabel = when (sortField) {
+                                        PackageSortField.PACKAGE -> "包名"
+                                        PackageSortField.NAME -> "名称"
+                                        PackageSortField.SIZE -> "大小"
+                                        PackageSortField.UPDATE_TIME -> "更新时间"
+                                    }
+                                    // 默认方向：包名/名称升序，大小/更新时间降序；逆向选择翻转
+                                    val ascending = when (sortField) {
+                                        PackageSortField.PACKAGE, PackageSortField.NAME -> !sortReverse
+                                        PackageSortField.SIZE, PackageSortField.UPDATE_TIME -> sortReverse
+                                    }
+                                    Text(
+                                        "$fieldLabel${if (ascending) "↑" else "↓"}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                },
+                                onClick = {
+                                    tempSortField = sortField
+                                    tempSortReverse = sortReverse
+                                    showSortMenu = false
+                                    showSortDialog = true
+                                }
+                            )
+                        }
                     }
                 }
             )
@@ -143,8 +274,105 @@ fun PackageManagerScreen(onBack: () -> Unit) {
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(currentApps ?: emptyList(), key = { it.packageName }) { app ->
+                        items(displayedApps, key = { it.packageName }) { app ->
                             AppPackageCard(app, onClick = { selectedApp = app })
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSortDialog) {
+        val fieldLabels = listOf(
+            PackageSortField.PACKAGE to "应用包名排序",
+            PackageSortField.NAME to "应用名称排序",
+            PackageSortField.SIZE to "安装包大小排序",
+            PackageSortField.UPDATE_TIME to "安装时间排序"
+        )
+        Dialog(
+            onDismissRequest = { showSortDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "排序方式",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(start = 8.dp, top = 4.dp, bottom = 4.dp)
+                    )
+                    for ((field, label) in fieldLabels) {
+                        val isSelected = tempSortField == field
+                        Surface(
+                            onClick = { tempSortField = field },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { tempSortReverse = !tempSortReverse }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = tempSortReverse,
+                            onCheckedChange = { tempSortReverse = it }
+                        )
+                        Text(
+                            text = "逆向选择",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { showSortDialog = false }) {
+                            Text("取消")
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            sortField = tempSortField
+                            sortReverse = tempSortReverse
+                            sortPrefs.edit()
+                                .putString(PREF_KEY_SORT_FIELD, sortField.name)
+                                .putBoolean(PREF_KEY_SORT_REVERSE, sortReverse)
+                                .apply()
+                            showSortDialog = false
+                        }) {
+                            Text("确定")
                         }
                     }
                 }

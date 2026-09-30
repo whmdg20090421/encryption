@@ -110,6 +110,8 @@ object AppDataPaths {
         PREFS_WIFI_PASSWORDS, PREFS_WIFI_DISCLAIMER -> wifi(context)
         // Hook 模块
         PREFS_HOOK -> hook(context)
+        // 安装包提取模块
+        PREFS_PACKAGE_MANAGER -> packageManager(context)
         // 安全设置模块（权限 / 特殊权限 / TEE）
         PREFS_SECURITY, PREFS_LEGACY_SPECIAL_PERMISSIONS,
         PREFS_PERMISSION_MANAGEMENT, PREFS_TEE -> security(context)
@@ -179,6 +181,13 @@ object AppDataPaths {
     /** Hook 模块目录 */
     fun hook(context: Context): File {
         val dir = File(root(context), "Hook")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 安装包提取模块目录 */
+    fun packageManager(context: Context): File {
+        val dir = File(root(context), "安装包提取")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
@@ -496,6 +505,9 @@ object AppDataPaths {
 
     /** Hook 模块 SharedPreferences */
     const val PREFS_HOOK = "hook_prefs"
+
+    /** 安装包提取模块 SharedPreferences（排序偏好等） */
+    const val PREFS_PACKAGE_MANAGER = "package_manager_prefs"
 
     /** 云盘同步 SharedPreferences */
     const val PREFS_CLOUD_SYNC = "cloud_sync_prefs"

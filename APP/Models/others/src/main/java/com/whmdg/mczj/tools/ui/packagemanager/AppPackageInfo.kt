@@ -27,6 +27,8 @@ data class AppPackageInfo(
     val icon: Drawable?,
     val versionName: String,
     val totalSize: Long,
+    /** 最后更新时间（毫秒），用于排序 */
+    val lastUpdateTime: Long,
     val isSystemApp: Boolean
 )
 
@@ -81,6 +83,7 @@ object AppPackageInfoProvider {
                     icon = icon,
                     versionName = packageInfo.versionName ?: "",
                     totalSize = baseSize + splitSize,
+                    lastUpdateTime = packageInfo.lastUpdateTime,
                     isSystemApp = isSystem
                 )
             } catch (_: Exception) {
