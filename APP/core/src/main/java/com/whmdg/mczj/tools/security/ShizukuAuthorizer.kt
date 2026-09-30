@@ -457,4 +457,22 @@ object ShizukuAuthorizer {
      * 调用前确保 UserService 已绑定（通过 executeCommand 或 ensureBound）。
      */
     fun getShellService(): IShellService? = shellService
+
+    /**
+     * Shizuku 服务是否已启动且本应用已获授权。
+     * 不含 UserService 绑定状态，仅用于判断是否具备走 Shizuku 的前提。
+     */
+    fun isAvailable(): Boolean {
+        return isShizukuServiceRunning() && hasShizukuPermission()
+    }
+
+    /**
+     * 确保 UserService 已绑定，必要时同步等待绑定完成。
+     * @return true 表示已就绪可执行命令
+     */
+    fun awaitUserService(timeoutMs: Long = 2000): Boolean {
+        if (shellService != null) return true
+        if (!isAvailable()) return false
+        return rebindSync(timeoutMs)
+    }
 }

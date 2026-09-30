@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.security
 
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import java.io.BufferedReader
@@ -49,8 +50,123 @@ object ShellDaemon {
         if (permission == Permission.ROOT) {
             return executeWithLibsu(command, permission)
         }
+        if (permission == Permission.ADB) {
+            return executeViaShizuku(command, permission)
+        }
         val shell = getOrCreateShell(permission)
         return executeInShell(shell, command, permission)
+    }
+
+    /**
+     * 通过 Shizuku UserService（uid 2000）执行命令。
+     * Shizuku 不可用或 UserService 始终无法绑定时，回退到应用自身权限（APPLICANT）。
+     * 下次需由用户在设置中手动切换权限级别。
+     */
+    private fun executeViaShizuku(command: String, permission: Permission): String {
+        if (!ShizukuAuthorizer.isAvailable()) {
+            Log.w(TAG, "Shizuku 不可用，回退到应用自身权限执行")
+            return executeInShell(getOrCreateShell(Permission.APPLICANT), command, permission)
+        }
+        if (!ShizukuAuthorizer.awaitUserService(2000)) {
+            Log.w(TAG, "Shizuku UserService 未就绪，回退到应用自身权限执行")
+            return executeInShell(getOrCreateShell(Permission.APPLICANT), command, permission)
+        }
+        val (stdout, stderr, exitCode) = ShizukuAuthorizer.executeCommand(command)
+        if (exitCode != 0) {
+            throw ShellException(
+                message = "命令执行失败",
+                command = command,
+                permission = permission,
+                stderr = stderr.ifBlank { stdout }.ifBlank { "exit $exitCode" },
+                exitCode = exitCode
+            )
+        }
+        return stdout
+    }
+
+    /**
+     * 通过 Shizuku UserService（uid 2000）流式执行命令。
+     * 用 PFD 管道把服务端输出实时回传给调用方逐行回调。
+     * Shizuku 不可用或 UserService 未就绪时，回退到应用自身权限执行。
+     */
+    private fun executeStreamingViaShizuku(
+        command: String,
+        permission: Permission,
+        useStderr: Boolean,
+        onOutputLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean?
+    ) {
+        if (!ShizukuAuthorizer.isAvailable()) {
+            Log.w(TAG, "Shizuku 不可用，回退到应用自身权限流式执行")
+            executeStreamingApplicant(command, permission, useStderr, onOutputLine, cancelFlag)
+            return
+        }
+        if (!ShizukuAuthorizer.awaitUserService(2000)) {
+            Log.w(TAG, "Shizuku UserService 未就绪，回退到应用自身权限流式执行")
+            executeStreamingApplicant(command, permission, useStderr, onOutputLine, cancelFlag)
+            return
+        }
+
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readFd = pipe[0]
+        val writeFd = pipe[1]
+        val readerThread = Thread {
+            try {
+                ParcelFileDescriptor.AutoCloseInputStream(readFd).bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        if (cancelFlag?.get() == true) break
+                        onOutputLine(line!!)
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { readFd.close() } catch (_: Exception) {}
+            }
+        }
+        readerThread.start()
+
+        var result: Triple<String, String, Int>? = null
+        var failure: Exception? = null
+        try {
+            result = if (useStderr) ShizukuAuthorizer.executeStreamingStderr(command, writeFd)
+            else ShizukuAuthorizer.executeStreamingStdout(command, writeFd)
+        } catch (e: Exception) {
+            failure = e
+        } finally {
+            try { writeFd.close() } catch (_: Exception) {}
+        }
+
+        try { readerThread.join(5000) } catch (_: InterruptedException) {}
+
+        failure?.let { throw it }
+        val (_, stderr, exitCode) = result!!
+        if (exitCode != 0) {
+            throw ShellException(
+                message = "流式命令执行失败",
+                command = command,
+                permission = permission,
+                stderr = stderr,
+                exitCode = exitCode
+            )
+        }
+    }
+
+    /**
+     * 以应用自身权限（APPLICANT）流式执行的公共回退实现。
+     */
+    private fun executeStreamingApplicant(
+        command: String,
+        permission: Permission,
+        useStderr: Boolean,
+        onOutputLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean?
+    ) {
+        if (useStderr) {
+            executeWithStderrFork(command, permission, onOutputLine, cancelFlag)
+        } else {
+            executeStreamingInShell(getOrCreateShell(Permission.APPLICANT), command, permission, onOutputLine, cancelFlag)
+        }
     }
 
     /**
@@ -65,6 +181,10 @@ object ShellDaemon {
     ) {
         if (permission == Permission.ROOT) {
             executeStreamingWithLibsu(command, permission, onOutputLine, cancelFlag)
+            return
+        }
+        if (permission == Permission.ADB) {
+            executeStreamingViaShizuku(command, permission, useStderr = false, onOutputLine, cancelFlag)
             return
         }
         val shell = getOrCreateShell(permission)
@@ -82,6 +202,10 @@ object ShellDaemon {
         onStderrLine: (String) -> Unit,
         cancelFlag: AtomicBoolean? = null
     ) {
+        if (permission == Permission.ADB) {
+            executeStreamingViaShizuku(command, permission, useStderr = true, onStderrLine, cancelFlag)
+            return
+        }
         // ponytail: stderr 流式需要独立进程，无法用持久 shell 的 stdin/stdout 管道
         // 回退到 fork 方式，但复用 shell 进程做其他命令
         executeWithStderrFork(command, permission, onStderrLine, cancelFlag)
@@ -99,6 +223,10 @@ object ShellDaemon {
     ) {
         if (permission == Permission.ROOT) {
             executeStreamingWithLibsu(command, permission, onStdoutLine, cancelFlag)
+            return
+        }
+        if (permission == Permission.ADB) {
+            executeStreamingViaShizuku(command, permission, useStderr = false, onStdoutLine, cancelFlag)
             return
         }
         val shell = getOrCreateShell(permission)
@@ -228,12 +356,11 @@ object ShellDaemon {
             try { shell.process.destroyForcibly() } catch (_: Exception) {}
         }
 
-        // 创建新的持久 shell
+        // 创建新的持久 shell。ADB 权限统一走 Shizuku UserService，不在此建立本地 shell。
         val process = when (permission) {
-            Permission.ADB -> ProcessBuilder("sh").start()
             Permission.APPLICANT -> ProcessBuilder("sh").start()
             else -> throw ShellException(
-                message = "不支持的权限级别: $permission",
+                message = "不支持的权限级别: $permission（ADB 权限请走 Shizuku）",
                 command = "",
                 permission = permission
             )

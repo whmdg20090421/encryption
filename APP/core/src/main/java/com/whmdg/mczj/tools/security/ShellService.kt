@@ -16,9 +16,9 @@ class ShellService : IShellService.Stub() {
             val stdoutB64 = Base64.encodeToString(stdout.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
             "$stdoutB64\n\n0"
         } catch (e: ShellException) {
-            val stdoutB64 = Base64.encodeToString((e.stderr).toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            val errB64 = Base64.encodeToString((e.message ?: "").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            "$stdoutB64\n$errB64\n${e.exitCode}"
+            val errText = e.stderr.ifBlank { e.message ?: "" }
+            val errB64 = Base64.encodeToString(errText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            "\n$errB64\n${e.exitCode}"
         } catch (e: Exception) {
             val errB64 = Base64.encodeToString(
                 (e.message ?: "执行异常").toByteArray(Charsets.UTF_8), Base64.NO_WRAP
@@ -58,8 +58,8 @@ class ShellService : IShellService.Stub() {
      * 执行命令，stderr 通过 PFD 管道实时流式返回。
      */
     override fun executeStreamingStderr(command: String, stderrWriteFd: ParcelFileDescriptor): String {
+        val os = ParcelFileDescriptor.AutoCloseOutputStream(stderrWriteFd)
         return try {
-            val os = ParcelFileDescriptor.AutoCloseOutputStream(stderrWriteFd)
             ShellDaemon.executeWithStderr(
                 Permission.APPLICANT,
                 command,
@@ -67,7 +67,6 @@ class ShellService : IShellService.Stub() {
                     try { os.write("$line\n".toByteArray()); os.flush() } catch (_: Exception) {}
                 }
             )
-            os.close()
             "\n\n0"
         } catch (e: ShellException) {
             val errB64 = Base64.encodeToString((e.message ?: "").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
@@ -77,6 +76,8 @@ class ShellService : IShellService.Stub() {
                 (e.message ?: "执行异常").toByteArray(Charsets.UTF_8), Base64.NO_WRAP
             )
             "\n$errB64\n-1"
+        } finally {
+            try { os.close() } catch (_: Exception) {}
         }
     }
 
@@ -84,8 +85,8 @@ class ShellService : IShellService.Stub() {
      * 执行命令，stdout 通过 PFD 管道实时流式返回。
      */
     override fun executeStreamingStdout(command: String, stdoutWriteFd: ParcelFileDescriptor): String {
+        val os = ParcelFileDescriptor.AutoCloseOutputStream(stdoutWriteFd)
         return try {
-            val os = ParcelFileDescriptor.AutoCloseOutputStream(stdoutWriteFd)
             ShellDaemon.executeWithStdout(
                 Permission.APPLICANT,
                 command,
@@ -93,7 +94,6 @@ class ShellService : IShellService.Stub() {
                     try { os.write("$line\n".toByteArray()); os.flush() } catch (_: Exception) {}
                 }
             )
-            os.close()
             "\n\n0"
         } catch (e: ShellException) {
             val errB64 = Base64.encodeToString((e.message ?: "").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
@@ -103,6 +103,8 @@ class ShellService : IShellService.Stub() {
                 (e.message ?: "执行异常").toByteArray(Charsets.UTF_8), Base64.NO_WRAP
             )
             "\n$errB64\n-1"
+        } finally {
+            try { os.close() } catch (_: Exception) {}
         }
     }
 
