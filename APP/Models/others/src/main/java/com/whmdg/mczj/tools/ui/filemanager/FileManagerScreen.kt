@@ -6300,6 +6300,9 @@ private fun FastScrollBar(
     val scope = rememberCoroutineScope()
     var isDragging by remember { mutableStateOf(false) }
     var isTouching by remember { mutableStateOf(false) }
+    // 拖动期间直接由手指位置驱动的滑块进度（0..1），与列表实际滚动解耦，
+    // 保证滑块严格跟手；松手后回落到由列表位置推导的 progress。
+    var dragProgress by remember { mutableStateOf(0f) }
 
     val isScrollInProgress by remember(listState) {
         derivedStateOf { listState.isScrollInProgress }
@@ -6329,6 +6332,7 @@ private fun FastScrollBar(
             (listState.firstVisibleItemIndex.toFloat() / maxFirst).coerceIn(0f, 1f)
         }
     }
+    val displayProgress = if (isDragging) dragProgress else progress
 
     // 滑块高度比例随条目数/可视数变化。通过 rememberUpdatedState 暴露给手势协程，
     // 使手势协程在垂直拖动期间不需要重建即可读到最新值。
@@ -6339,10 +6343,10 @@ private fun FastScrollBar(
     Box(
         modifier = modifier
             .width(20.dp)
-            // 单一手势状态机：按下后先记录位置，垂直位移超过 slop 进入拖动，否则抬起视为点击跳转。
+            // 单一手势状态机：按下后先记录按下点锚位，垂直位移超过 slop 进入拖动，否则抬起视为点击跳转。
             // 关键点：pointerInput 的 key 仅绑定 listState，拖动手势绝不因滚动导致的重组而重建；
-            // 轨道高度直接取自 PointerInputScope.size，条目数/可视数由 layoutInfo 在协程内实时读取，
-            // 避免拖动过程中因 key（如 trackHeight/visibleItems）变化取消协程而卡死。
+            // 轨道/滑块尺寸与条目范围在手势开始时一次性锁定（同一文件夹内为稳定值），
+            // 拖动期间滑块进度直接由手指位置驱动，不依赖会随滚动变化的预估值，从而严格跟手。
             .pointerInput(listState) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -6350,47 +6354,72 @@ private fun FastScrollBar(
                     down.consume()
                     isTouching = true
                     val touchSlop = viewConfiguration.touchSlop
-                    var dragging = false
-                    var totalDy = 0f
+
+                    // 手势开始时一次性锁定轨道/滑块尺寸与可滚动条目范围。
+                    // 这些量在同一文件夹内是稳定值（卡片高度一致），锁定后整个手势期间不再重算，
+                    // 避免手势中途因 layoutInfo 抖动导致 fraction 跳变。
+                    val trackH = size.height.toFloat()
+                    val thumbH = trackH * thumbFractionState.value
+                    val scrollablePx = (trackH - thumbH).coerceAtLeast(1f)
+                    val info0 = listState.layoutInfo
+                    val maxFirst = (info0.totalItemsCount - info0.visibleItemsInfo.size)
+                        .coerceAtLeast(0)
+
+                    // 以“按下点”为锚点：手指按在滑块的哪个位置，该位置就始终贴着手指。
+                    // 按在滑块上 → 记录该处相对滑块顶部的偏移，实现“点哪跟哪”；
+                    // 按在轨道空白处 → 视为跳转，直接把按下点当作滑块顶部并立即进入拖动跟随。
+                    val currentThumbTop = progress.coerceIn(0f, 1f) * scrollablePx
+                    val downInThumb = down.position.y in currentThumbTop..(currentThumbTop + thumbH)
+                    val grabAnchor = if (downInThumb) {
+                        (down.position.y - currentThumbTop).coerceIn(0f, thumbH)
+                    } else {
+                        0f
+                    }
+                    var dragging = downInThumb.not()
+                    // 按在滑块上时，当前位置即滑块当前进度（轻点不移动就不跳转）；
+                    // 按在空白轨道处时，按下点即为新的进度。
+                    var lastFraction = if (downInThumb) {
+                        progress.coerceIn(0f, 1f)
+                    } else {
+                        ((down.position.y - grabAnchor) / scrollablePx).coerceIn(0f, 1f)
+                    }
+                    if (dragging) {
+                        isDragging = true
+                        dragProgress = lastFraction
+                    }
+
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: continue
                         if (!change.pressed) {
                             change.consume()
                             if (!dragging) {
-                                // 视为点击：按点击位置跳转。所有尺寸/数量在抬手瞬间实时读取。
-                                val info = listState.layoutInfo
-                                val total = info.totalItemsCount
-                                val visible = info.visibleItemsInfo.size
-                                val trackH = size.height.toFloat()
-                                val thumbH = trackH * thumbFractionState.value
-                                val maxFirst = (total - visible).coerceAtLeast(0)
-                                val scrollablePx = (trackH - thumbH).coerceAtLeast(1f)
-                                val fraction = ((down.position.y - thumbH / 2f) / scrollablePx)
-                                    .coerceIn(0f, 1f)
-                                scope.launch {
-                                    listState.animateScrollToItem((fraction * maxFirst).roundToInt())
-                                }
+                                // 点击滑块：跳转到按下点对应的位置（动画滚动）
+                                val target = (lastFraction * maxFirst).roundToInt()
+                                scope.launch { listState.animateScrollToItem(target) }
                             } else {
                                 isDragging = false
                             }
                             isTouching = false
                             break
                         }
-                        val dy = change.position.y - change.previousPosition.y
-                        totalDy += dy
-                        if (!dragging && abs(totalDy) > touchSlop) {
-                            dragging = true
-                            isDragging = true
+                        if (!dragging) {
+                            val dyFromDown = change.position.y - down.position.y
+                            if (abs(dyFromDown) > touchSlop) {
+                                dragging = true
+                                isDragging = true
+                                dragProgress = lastFraction
+                            }
                         }
                         if (dragging) {
-                            // 把滑块位移映射到列表的真实可滚动像素范围
-                            val trackH = size.height.toFloat()
-                            val thumbH = trackH * thumbFractionState.value
-                            val totalScrollPx = totalScrollablePixels(listState)
-                            val scrollablePx = (trackH - thumbH).coerceAtLeast(1f)
-                            val deltaPx = dy / scrollablePx * totalScrollPx
-                            listState.dispatchRawDelta(deltaPx)
+                            // 滑块顶部 = 手指位置 - 抓取锚点，直接映射为进度，保证严格跟手
+                            val fraction = ((change.position.y - grabAnchor) / scrollablePx)
+                                .coerceIn(0f, 1f)
+                            dragProgress = fraction
+                            if (fraction != lastFraction) {
+                                lastFraction = fraction
+                                listState.scrollToItem((fraction * maxFirst).roundToInt())
+                            }
                             change.consume()
                         }
                     }
@@ -6401,7 +6430,7 @@ private fun FastScrollBar(
             val barWidth = 4.dp.toPx()
             val x = (size.width - barWidth) / 2f
             val thumbHeightPx = size.height * visibleFraction
-            val thumbTop = progress * (size.height - thumbHeightPx)
+            val thumbTop = displayProgress * (size.height - thumbHeightPx)
             drawRoundRect(
                 color = barColor.copy(alpha = thumbAlpha),
                 topLeft = Offset(x, thumbTop),
@@ -6410,19 +6439,6 @@ private fun FastScrollBar(
             )
         }
     }
-}
-
-/**
- * 估算列表当前可滚动的总像素范围：所有已知条目按平均高度折算，再减去视口高度。
- * 用于把快速滚动条的拖动位移正确映射到像素增量（dispatchRawDelta 需要像素而非条目数）。
- */
-private fun totalScrollablePixels(listState: LazyListState): Float {
-    val info = listState.layoutInfo
-    val visible = info.visibleItemsInfo
-    if (visible.isEmpty()) return 0f
-    val avgItemHeight = visible.sumOf { it.size }.toFloat() / visible.size
-    val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
-    return (info.totalItemsCount * avgItemHeight - viewport).coerceAtLeast(0f)
 }
 
 /**
