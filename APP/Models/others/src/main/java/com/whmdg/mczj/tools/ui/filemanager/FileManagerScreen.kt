@@ -316,10 +316,13 @@ fun FileManagerScreen(
 
     // 回到前台（从后台切回 / 息屏点亮 / 从其他 Activity 返回）时刷新双面板，
     // 避免停留期间外部改动或列表失效导致内容过期或空白。
+    // 刷新在界面恢复稳定之后才执行（见下方 pendingResumeRefresh），避免在恢复瞬间
+    // 重建列表把用户挂起前的滚动位置冲掉。
     // 文件操作进行中不打断，避免清空并重载列表干扰正在跑的复制/移动/删除。
     // 首次进入时 lifecycle 已处于 RESUMED，addObserver 会立即补发一次 ON_RESUME，
     // 该次并非「从后台返回」，跳过以免与面板初始化竞争。
     val lifecycleOwner = LocalLifecycleOwner.current
+    var pendingResumeRefresh by remember { mutableStateOf(false) }
     DisposableEffect(lifecycleOwner) {
         var firstResumeHandled = true
         val observer = LifecycleEventObserver { _, event ->
@@ -327,12 +330,20 @@ fun FileManagerScreen(
                 if (firstResumeHandled) {
                     firstResumeHandled = false
                 } else if (FileOperationManager.progress.value == null) {
-                    vm.refreshBoth()
+                    pendingResumeRefresh = true
                 }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // 界面恢复后先等首帧绘制完成（稳定显示挂起前的原貌），再刷新列表。
+    // 刷新本身已按「首项文件名」保位（见 PanelCoordinator.refreshBoth），故不会跳顶。
+    LaunchedEffect(pendingResumeRefresh) {
+        if (!pendingResumeRefresh) return@LaunchedEffect
+        withFrameNanos { }
+        vm.refreshBoth()
+        pendingResumeRefresh = false
     }
 
     // 退出时清理云盘模式

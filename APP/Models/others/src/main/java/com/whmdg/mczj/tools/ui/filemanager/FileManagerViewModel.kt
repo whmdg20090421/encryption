@@ -310,6 +310,13 @@ class FilePaneController(
         var currentScrollOffset by mutableIntStateOf(0)
             internal set
 
+        /**
+         * 刷新时的滚动锚点：记录刷新前首项的文件名。刷新完成后在 [applyAnchorScroll]
+         * 中定位到同名条目，使刷新前后用户正在查看的文件保持不动（新增/删除不影响）。
+         * 仅在一次刷新加载期间有效，消费后即清空。
+         */
+        internal var refreshAnchorName: String? = null
+
         // ── 回收站路径 ──
         var recycleBinPath by mutableStateOf("")
             internal set
@@ -612,6 +619,7 @@ class FilePaneController(
                     panel.path = panelPath
                 }
                 panel.entries = sorted
+                applyAnchorScroll(panel, sorted, panel.currentScrollIndex)
                 panel.listGeneration++
                 onComplete?.invoke(targetPath)
             }
@@ -815,6 +823,7 @@ class FilePaneController(
                     panel.path = panelPath
                 }
                 panel.entries = sorted
+                applyAnchorScroll(panel, sorted, panel.currentScrollIndex)
                 panel.listGeneration++
                 onComplete?.invoke(targetPath)
             }
@@ -831,7 +840,8 @@ class FilePaneController(
         isRefresh: Boolean = false,
         onComplete: ((String) -> Unit)? = null,
         panelPath: PanelPath = PanelPath.FileSystem(targetPath),
-        scrollSeed: Pair<Int, Int>? = null
+        scrollSeed: Pair<Int, Int>? = null,
+        anchorName: String? = null
     ) {
         // 在加载发起时确定新目录的初始滚动偏移：显式 seed 优先，否则从顶部开始。
         // 内容提交（listGeneration 自增）时列表会以该偏移重建，第一帧即定位。
@@ -842,6 +852,7 @@ class FilePaneController(
         panel.loadVersion++
         panel.entries = emptyList()
         panel.isLoading = true
+        panel.refreshAnchorName = anchorName
         panel.resetTransientState()
 
         if (hasShellEngine()) {
@@ -849,6 +860,20 @@ class FilePaneController(
         } else {
             loadDirectorySync(targetPath, panel, isRefresh, onComplete, panelPath)
         }
+    }
+
+    /**
+     * 刷新时以「首项文件名」为锚点定位：在刷新后的新列表中找到同名条目，
+     * 将其设为初始滚动位置，使刷新前后用户正在查看的文件保持不动。
+     * 锚点不存在（被删除/改名）时退回 [fallbackIndex]（旧下标，coerce 到新列表范围内）。
+     */
+    private fun applyAnchorScroll(panel: FilePaneController.VmPanelState, entries: List<FileEntry>, fallbackIndex: Int) {
+        val anchor = panel.refreshAnchorName
+        panel.refreshAnchorName = null
+        if (anchor == null) return
+        val idx = entries.indexOfFirst { it.name == anchor }
+        val target = if (idx >= 0) idx else fallbackIndex.coerceIn(0, (entries.size - 1).coerceAtLeast(0))
+        panel.setInitialScroll(target, 0)
     }
 
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
@@ -1428,12 +1453,14 @@ class FilePaneController(
      */
     internal fun loadWebDavEntries(
         panel: FilePaneController.VmPanelState = state,
-        scrollSeed: Pair<Int, Int>? = null
+        scrollSeed: Pair<Int, Int>? = null,
+        anchorName: String? = null
     ) {
         val client = panel.webDavClient ?: return
         val config = panel.webDavConfig
         val seed = scrollSeed ?: (0 to 0)
         panel.setInitialScroll(seed.first, seed.second)
+        panel.refreshAnchorName = anchorName
 
         scope.launch {
             try {
@@ -1456,7 +1483,9 @@ class FilePaneController(
                         )
                     }
 
-                    panel.entries = sortEntries(entries)
+                    val sorted = sortEntries(entries)
+                    panel.entries = sorted
+                    applyAnchorScroll(panel, sorted, panel.currentScrollIndex)
                     panel.listGeneration++
                     panel.loadError = null
                 }
@@ -2630,6 +2659,8 @@ class FilePaneController(
         val panel = state
         // 刷新保持当前滚动位置：以当前位置作为重新加载的播种偏移
         val seed = panel.currentScrollIndex to panel.currentScrollOffset
+        // 以当前首项文件名作为锚点：刷新后定位到同名条目，新增/删除不改变用户视点
+        val anchor = panel.entries.getOrNull(panel.currentScrollIndex)?.name
         if (panel.isInArchiveMode) {
             panel.setInitialScroll(seed.first, seed.second)
             panel.currentArchiveSession?.let { session ->
@@ -2641,13 +2672,13 @@ class FilePaneController(
         when (val p = panel.path) {
             is PanelPath.FileSystem -> {
                 if (panel.isWebDavMode) {
-                    loadWebDavEntries(panel, scrollSeed = seed)
+                    loadWebDavEntries(panel, scrollSeed = seed, anchorName = anchor)
                 } else {
-                    loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed)
+                    loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed, anchorName = anchor)
                 }
             }
             is PanelPath.Vault -> {
-                loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed)
+                loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed, anchorName = anchor)
             }
         }
     }
@@ -2801,16 +2832,19 @@ class PanelCoordinator(
                 }
                 continue
             }
+            // 以当前首项文件名作为锚点，刷新后定位到同名条目，保持用户视点不变
+            val seed = panel.currentScrollIndex to panel.currentScrollOffset
+            val anchor = panel.entries.getOrNull(panel.currentScrollIndex)?.name
             when (val p = panel.path) {
                 is PanelPath.FileSystem -> {
                     if (panel.isWebDavMode) {
-                        ctrl.loadWebDavEntries(panel)
+                        ctrl.loadWebDavEntries(panel, scrollSeed = seed, anchorName = anchor)
                     } else {
-                        ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                        ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed, anchorName = anchor)
                     }
                 }
                 is PanelPath.Vault -> {
-                    ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                    ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed, anchorName = anchor)
                 }
             }
         }
