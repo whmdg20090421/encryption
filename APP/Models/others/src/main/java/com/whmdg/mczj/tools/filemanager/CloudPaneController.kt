@@ -27,6 +27,15 @@ import java.time.Instant
 import com.whmdg.mczj.tools.AppDataPaths
 
 /**
+ * 云端同步 DB 上传时的 UI 反馈方式。
+ *
+ * - [DIALOG]：进度弹窗（失败弹「重试/确认」对话框，重试按钮等价于全新命令）
+ * - [TOAST]：仅在屏幕下方弹 Toast 提示
+ * - [SILENT]：无任何反馈（用于删除/恢复等后台场景）
+ */
+enum class DbUploadFeedback { DIALOG, TOAST, SILENT }
+
+/**
  * 云盘面板控制器。
  *
  * 显示本地保险箱文件 + 同步状态（不从 WebDAV 读取）。
@@ -48,6 +57,8 @@ class CloudPaneController(
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
     private var downloadJob: Job? = null
+    /** 串行化云端 DB 上传，避免周期上传与收尾上传并发写同一云端文件。 */
+    private val dbUploadMutex = kotlinx.coroutines.sync.Mutex()
     // 每次访问都经 getInstance 校验底层文件是否仍存在：文件被删除/替换后
     // 旧实例的文件描述符已失效，需重建（支持 init 前的云端索引恢复）。
     private val syncDb: SyncDatabase get() = SyncDatabase.getInstance(context, vaultName)
@@ -554,7 +565,7 @@ class CloudPaneController(
 
                         // 关闭进度弹窗，上传 cloud.db（自带弹窗）
                         closeProgressDialog()
-                        uploadCloudDbWithUI()
+                        uploadCloudDb(DbUploadFeedback.DIALOG)
                         // 无论成功失败都删除锁文件
                         com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
 
@@ -1238,6 +1249,30 @@ class CloudPaneController(
                 }
             }
 
+            // 周期上传云端 DB：大批量上传耗时可能远超 5 分钟，期间若不上传 DB，
+            // 其他设备拉到的云端索引一直是旧的，只能等整批传完。这里每满 5 分钟
+            // 把「当前已上传到的 cloud_entries」单独上传一次，让其他设备能提前同步。
+            // 完全独立于主上传进度：只弹 Toast，不占用主进度 UI。
+            // 失败后的重试统一交给 uploadCloudDb 的 retry 参数（重试 1 次、等 30 秒）。
+            val periodicDbUploadJob = launch {
+                while (isActive) {
+                    delay(PERIODIC_DB_UPLOAD_INTERVAL_MS)
+                    // 5 分钟到点：若主上传已结束（本轮队列跑完）则不再补传，交由收尾统一上传
+                    if (queueIndex >= finalQueue.size && activeWorkers == 0) break
+                    val ok = uploadCloudDb(
+                        feedback = DbUploadFeedback.TOAST,
+                        retry = true,
+                        retryCount = 1,
+                        retryDelayMs = PERIODIC_DB_RETRY_DELAY_MS
+                    )
+                    // 失败：本次已含 1 次重试，仍失败则等到下一个 5 分钟整点再试，
+                    // 即再等 5 分钟 - 30 秒 = 4 分 30 秒。
+                    if (!ok && isActive) {
+                        delay(PERIODIC_DB_UPLOAD_INTERVAL_MS - PERIODIC_DB_RETRY_DELAY_MS)
+                    }
+                }
+            }
+
             // 上传工作协程（回调仅发送事件，不直接修改 state）
             val uploadJobs = mutableListOf<Job>()
 
@@ -1282,6 +1317,9 @@ class CloudPaneController(
             uploadJobs.forEach { it.join() }
             eventChannel.close()
             updaterJob.join()
+            // 主上传已结束：停止周期 DB 上传，避免与收尾的最终 DB 上传并发写同一云端文件
+            periodicDbUploadJob.cancel()
+            periodicDbUploadJob.join()
             // 终态强制刷新一次通知，避免停在两次节流之间的中间值
             if (uploadTotalBytes > 0) {
                 val elapsedMs = System.currentTimeMillis() - uploadStartMs
@@ -1317,7 +1355,7 @@ class CloudPaneController(
 
             // ⑲ 关闭进度弹窗，上传 cloud.db（自带弹窗）
             closeProgressDialog()
-            uploadCloudDbWithUI()
+            uploadCloudDb(DbUploadFeedback.DIALOG)
             // 无论成功失败都删除锁文件
             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
           } finally {
@@ -1534,7 +1572,7 @@ class CloudPaneController(
 
                 // 关闭进度弹窗，上传 cloud.db（自带弹窗，无论是否修改都无害）
                 closeProgressDialog()
-                uploadCloudDbWithUI()
+                uploadCloudDb(DbUploadFeedback.DIALOG)
                 com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
                 state.syncTask = SyncTaskState()
                 state.onCancelUpload = null
@@ -1670,7 +1708,7 @@ class CloudPaneController(
                     syncDb.adjustCloudStats(-deletedCount, -deletedSize)
 
                     // 上传更新后的 cloud.db 到云端
-                    uploadCloudDb()
+                    uploadCloudDb(DbUploadFeedback.SILENT)
                 }
                 navigateTo(state.currentPath)
                 onComplete?.invoke()
@@ -1755,7 +1793,7 @@ class CloudPaneController(
                     syncDb.adjustCloudStats(-deletedCloudCount, -deletedCloudSize)
 
                     // 上传更新后的 cloud.db 到云端
-                    uploadCloudDb()
+                    uploadCloudDb(DbUploadFeedback.SILENT)
                 }
                 navigateTo(state.currentPath)
                 onComplete?.invoke()
@@ -1850,7 +1888,7 @@ class CloudPaneController(
 
             // 3. 关闭进度弹窗，上传 cloud.db（自带弹窗）
             closeProgressDialog()
-            uploadCloudDbWithUI()
+            uploadCloudDb(DbUploadFeedback.DIALOG)
             // 无论成功失败都删除锁文件
             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
 
@@ -1889,118 +1927,146 @@ class CloudPaneController(
         return state.syncTask.fileProgress[path]
     }
 
-    /** 压缩并上传 cloud.db 到 .sync_meta/。成功返回 true，失败返回 false。 */
+    /** 统一入口：把当前 cloud_entries 同步（加密压缩后上传）到云端 `.sync_meta/`。 */
     /**
-     * 上传 cloud.db 到云端，带 UI 弹窗反馈。
-     * 成功：关闭弹窗，删除锁文件。
-     * 失败：弹窗显示错误原因 + 重试/确认按钮，锁文件由调用方删除。
-     * @return true=成功，false=失败（用户点确认或重试后仍失败）
+     * 所有"上传同步 DB 到云端"的行为都收敛到本函数，避免各调用点逻辑漂移。
+     *
+     * - UI 反馈由 [feedback] 决定：DIALOG=弹窗进度 / TOAST=仅 Toast / SILENT=无反馈。
+     * - 自动重试由 [retry] 控制；仅当 [retry]=true 时 [retryCount] 与 [retryDelayMs] 生效，
+     *   否则忽略后两个参数。
+     * - DIALOG 失败弹窗中的"重试"按钮不参与自动重试机制：用户点击时等价于发起一次
+     *   全新的 [uploadCloudDb]（DIALOG，retry=false）。
+     * - 通过 [dbUploadMutex] 串行化，保证同一时刻只有一个 DB 上传在跑（如周期上传与
+     *   收尾上传不会并发写同一云端文件）。
+     *
+     * @param feedback UI 反馈方式
+     * @param retry 是否自动重试（默认 false）
+     * @param retryCount 自动重试次数（仅在 retry=true 时生效，默认 1）
+     * @param retryDelayMs 每次重试前的等待毫秒（仅在 retry=true 时生效，默认 5000）
+     * @return true=成功，false=失败
      */
-    suspend fun uploadCloudDbWithUI(): Boolean {
-        // 显示同步弹窗
-        state.cloudDbSyncState = CloudDbSyncState(phase = "正在加密")
+    suspend fun uploadCloudDb(
+        feedback: DbUploadFeedback = DbUploadFeedback.SILENT,
+        retry: Boolean = false,
+        retryCount: Int = 1,
+        retryDelayMs: Long = 5_000L
+    ): Boolean = dbUploadMutex.withLock {
+        uploadCloudDbLocked(feedback, retry, retryCount, retryDelayMs)
+    }
 
-        val result = withContext(Dispatchers.IO) {
-            try {
-                val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
+    /**
+     * [uploadCloudDb] 的加锁内实现。调用方必须已持有 [dbUploadMutex]。
+     *
+     * DIALOG 失败弹窗的"重试"按钮在此内部循环，而不是递归调用 [uploadCloudDb]，
+     * 以避免对同一 [Mutex] 重入导致死锁。
+     */
+    private suspend fun uploadCloudDbLocked(
+        feedback: DbUploadFeedback,
+        retry: Boolean,
+        retryCount: Int,
+        retryDelayMs: Long
+    ): Boolean {
+        // 仅当 retry=true 时后两个参数才生效
+        val maxAttempts = if (retry) (retryCount.coerceAtLeast(0) + 1) else 1
 
-                // 切换状态：正在上传
-                withContext(Dispatchers.Main) {
-                    state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在上传")
+        var attempt = 0
+        while (true) {
+            attempt++
+            when (feedback) {
+                DbUploadFeedback.DIALOG -> state.cloudDbSyncState = CloudDbSyncState(phase = "正在加密")
+                DbUploadFeedback.TOAST -> withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "正在同步云端索引…", android.widget.Toast.LENGTH_SHORT).show()
                 }
-
-                // 使用封装的上传函数
-                val configFile = File(vaultDir, "vault_config.json")
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
-                    context = context,
-                    client = webdavClient,
-                    configPath = webdavConfig.relativePath,
-                    vaultName = vaultName,
-                    dbFile = dbFile,
-                    configFile = configFile
-                )
-
-                // 切换状态：正在验证
-                withContext(Dispatchers.Main) {
-                    state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在验证")
-                }
-
-                // 保存远程元数据
-                val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
-                    if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
-                    else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
-                }
-                val remoteMeta = webdavClient.getFileMetadata(remotePath)
-                if (remoteMeta != null) {
-                    saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
-                }
-                CloudDbResult.Success
-            } catch (e: Exception) {
-                CloudDbResult.Failure(e.message ?: "未知错误")
+                DbUploadFeedback.SILENT -> Unit
             }
-        }
 
-        return when (result) {
-            is CloudDbResult.Success -> {
-                state.cloudDbSyncState = null
-                true
+            val error = withContext(Dispatchers.IO) {
+                try {
+                    val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
+
+                    if (feedback == DbUploadFeedback.DIALOG) {
+                        withContext(Dispatchers.Main) {
+                            state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在上传")
+                        }
+                    }
+
+                    val configFile = File(vaultDir, "vault_config.json")
+                    com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
+                        context = context,
+                        client = webdavClient,
+                        configPath = webdavConfig.relativePath,
+                        vaultName = vaultName,
+                        dbFile = dbFile,
+                        configFile = configFile
+                    )
+
+                    if (feedback == DbUploadFeedback.DIALOG) {
+                        withContext(Dispatchers.Main) {
+                            state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在验证")
+                        }
+                    }
+
+                    // 保存远程元数据
+                    val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                        if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                        else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    }
+                    webdavClient.getFileMetadata(remotePath)?.let {
+                        saveCloudDbMeta(it.size, it.lastModified)
+                    }
+                    null
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
+                    e.message ?: "未知错误"
+                }
             }
-            is CloudDbResult.Failure -> {
-                // 显示错误弹窗，等待用户选择重试或确认
+
+            if (error == null) {
+                // 成功
+                when (feedback) {
+                    DbUploadFeedback.DIALOG -> state.cloudDbSyncState = null
+                    DbUploadFeedback.TOAST -> withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "云端索引已同步", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    DbUploadFeedback.SILENT -> Unit
+                }
+                return true
+            }
+
+            // 失败：还有自动重试次数则等待后重试
+            if (attempt < maxAttempts) {
+                delay(retryDelayMs)
+                continue
+            }
+
+            // 已无重试次数
+            if (feedback == DbUploadFeedback.DIALOG) {
+                // 弹错误弹窗；用户点击"重试"时按全新命令（无自动重试）再跑一次，
+                // 在锁内循环以避免重入死锁。
                 val userChoice = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
                     state.cloudDbSyncState = CloudDbSyncState(
                         phase = "上传失败",
                         isError = true,
-                        errorMessage = result.message,
+                        errorMessage = error,
                         onRetry = { cont.resume(true) {} },
                         onConfirm = { cont.resume(false) {} }
                     )
                 }
                 state.cloudDbSyncState = null
                 if (userChoice) {
-                    // 重试
-                    uploadCloudDbWithUI()
-                } else {
-                    false
+                    attempt = 0
+                    continue
+                }
+                return false
+            }
+            if (feedback == DbUploadFeedback.TOAST) {
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "云端索引同步失败，稍后重试", android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
-        }
-    }
-
-    private sealed class CloudDbResult {
-        object Success : CloudDbResult()
-        data class Failure(val message: String) : CloudDbResult()
-    }
-
-    /** 上传 cloud.db（无 UI，用于恢复场景） */
-    suspend fun uploadCloudDb(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
-
-            // 使用封装的上传函数
-            val configFile = File(vaultDir, "vault_config.json")
-            com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
-                context = context,
-                client = webdavClient,
-                configPath = webdavConfig.relativePath,
-                vaultName = vaultName,
-                dbFile = dbFile,
-                configFile = configFile
-            )
-
-            // 保存远程元数据
-            val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
-                if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
-                else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
-            }
-            val remoteMeta = webdavClient.getFileMetadata(remotePath)
-            if (remoteMeta != null) {
-                saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
-            }
-            true
-        } catch (e: Exception) {
-            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
-            false
+            return false
         }
     }
 
@@ -3062,5 +3128,11 @@ class CloudPaneController(
     private companion object {
         /** 上传过程中目录聚合的最小刷新间隔（毫秒），用于合并高频文件事件。 */
         const val MIN_AGGREGATE_INTERVAL_MS = 300L
+
+        /** 大批量上传期间，周期上传云端 DB 的间隔（5 分钟）。 */
+        const val PERIODIC_DB_UPLOAD_INTERVAL_MS = 5 * 60 * 1000L
+
+        /** 周期 DB 上传失败后的一次重试等待（30 秒）。 */
+        const val PERIODIC_DB_RETRY_DELAY_MS = 30 * 1000L
     }
 }
