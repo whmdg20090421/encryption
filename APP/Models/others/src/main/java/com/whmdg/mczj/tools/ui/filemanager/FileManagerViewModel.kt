@@ -67,6 +67,7 @@ import com.whmdg.mczj.tools.ui.components.extractExtension
 import com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod
 import com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore
 import com.whmdg.mczj.tools.ui.components.OpenMethod
+import com.whmdg.mczj.tools.ui.components.loadApkInfo
 import com.whmdg.mczj.tools.ui.viewer.ViewerActivity
 import com.whmdg.mczj.tools.ui.viewer.AudioPlayerActivity
 import com.whmdg.mczj.tools.ui.viewer.VideoPlayerActivity
@@ -3896,6 +3897,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         apksInfoError = null
         apksInfoExtracting = true
         apksInfoProgress = 0f
+        // 新一轮信息查看：清理上一轮临时文件与保护标记
+        cleanupApkInfoTemp()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val entries = JBindingClient.listArchiveEntries(entry.path).getOrElse { e ->
@@ -3964,8 +3967,162 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 关闭 APK 信息弹窗，并清理 .apks 解出的临时 base.apk。 */
     fun dismissApkInfo() {
         pendingApkEntry = null
+        // 静默安装进行中：临时 base.apk 仍被安装命令引用，等安装结束再清理
+        if (apkInstallPending) return
+        cleanupApkInfoTemp()
+    }
+
+    // ── APK 安装 ────────────────────────────────────────────────────
+
+    /** 静默安装是否正在进行（用于保护 .apks 临时 base.apk 不被提前删除）。 */
+    private var apkInstallPending = false
+
+    /** APK 安装结果弹窗状态。 */
+    sealed interface ApkInstallState {
+        /** 静默安装成功。 */
+        data class Success(val appName: String, val packageName: String) : ApkInstallState
+        /**
+         * 静默安装失败：[error] 为完整报错原文（可滚动查看），
+         * [entryPath] 用于「继续」时回退到系统安装器。
+         */
+        data class Failed(
+            val appName: String,
+            val entryPath: String,
+            val error: String
+        ) : ApkInstallState
+    }
+
+    /** 非空时由 UI 渲染安装结果弹窗。 */
+    var apkInstallState by mutableStateOf<ApkInstallState?>(null)
+        private set
+
+    fun dismissApkInstall() {
+        apkInstallState = null
+        cleanupApkInfoTemp()
+    }
+
+    /** 安装结束后清理 .apks 解出的临时 base.apk。 */
+    private fun cleanupApkInfoTemp() {
+        apkInstallPending = false
         apkInfoTempPath?.let { runCatching { File(it).delete() } }
         apkInfoTempPath = null
+    }
+
+    /**
+     * 安装按钮入口。
+     *
+     * 规则：
+     * 1. 若该后缀存在默认打开方式（用户可能长按指定了第三方安装器）→ 优先遵循默认：
+     *    - External → 直接启动该第三方安装器；
+     *    - BuiltIn → 走下方静默安装流程（内置安装即本应用自身逻辑）。
+     * 2. 无默认打开方式时：
+     *    - Root 权限且 su 可用 → `pm install -r` 以 root 执行；
+     *    - ADB（Shizuku）已授权 → `pm install -r` 以 shell 执行；
+     *    - 普通权限 → 直接调用系统安装器。
+     * 3. 静默安装失败 → 弹出可查看报错的失败弹窗，由用户选择「继续」回退系统安装器。
+     */
+    fun installApk(entry: FileEntry) {
+        val context = getApplication<Application>()
+        DiagnosticLog.log("ApkInstall", "安装请求: ${entry.path}")
+
+        // 1. 默认打开方式优先
+        val method = DefaultOpenMethodStore.get(context, DefaultOpenMethodStore.KEY_APK)
+        if (method is OpenMethod.External) {
+            DiagnosticLog.log("ApkInstall", "遵循默认第三方安装器: ${method.packageName}")
+            if (launchExternalByDefault(context, entry, method)) return
+            // 默认应用失效：清除后继续走静默安装
+            DiagnosticLog.log("ApkInstall", "默认第三方安装器失效，清除默认")
+            DefaultOpenMethodStore.remove(context, DefaultOpenMethodStore.KEY_APK)
+        }
+
+        // 2. 静默安装（Root / ADB），普通权限直接系统安装器
+        val useRoot = permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
+        val useAdb = !useRoot && SpecialPermissionVerifier.isShizukuAuthorized(context)
+
+        if (!useRoot && !useAdb) {
+            DiagnosticLog.log("ApkInstall", "普通权限，调用系统安装器")
+            // 系统安装器异步读取 URI，期间保护 .apks 临时 base.apk
+            apkInstallPending = true
+            launchSystemInstaller(context, entry.path)
+            return
+        }
+
+        val permission = if (useRoot) Permission.ROOT else Permission.ADB
+        DiagnosticLog.log("ApkInstall", "静默安装 permission=$permission")
+        // 静默安装异步进行，期间保护 .apks 临时 base.apk
+        apkInstallPending = true
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    ShellExecutor.execute(permission, "pm install -r ${ShellEscape.escape(entry.path)}")
+                }
+            }
+            result.fold(
+                onSuccess = { output ->
+                    val info = withContext(Dispatchers.IO) { loadApkInfo(context, entry.path) }
+                    DiagnosticLog.log("ApkInstall", "静默安装成功: ${output.take(200)}")
+                    cleanupApkInfoTemp()
+                    apkInstallState = ApkInstallState.Success(
+                        appName = info?.appName ?: entry.name.substringBeforeLast('.'),
+                        packageName = info?.packageName.orEmpty()
+                    )
+                },
+                onFailure = { e ->
+                    val err = (e as? ShellException)?.stderr?.ifBlank { e.message }
+                        ?: e.message ?: "未知错误"
+                    DiagnosticLog.log("ApkInstall", "静默安装失败: $err")
+                    val info = withContext(Dispatchers.IO) { loadApkInfo(context, entry.path) }
+                    apkInstallPending = false
+                    apkInstallState = ApkInstallState.Failed(
+                        appName = info?.appName ?: entry.name.substringBeforeLast('.'),
+                        entryPath = entry.path,
+                        error = err
+                    )
+                }
+            )
+        }
+    }
+
+    /** 用系统安装器打开 APK（FileProvider + ACTION_VIEW）。 */
+    private fun launchSystemInstaller(context: Context, apkPath: String) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", File(apkPath)
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            DiagnosticLog.log("ApkInstall", "系统安装器启动失败: ${e.javaClass.simpleName}: ${e.message}")
+            Toast.makeText(context, "无法调用系统安装器: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 失败弹窗「继续」：回退到系统安装器并关闭弹窗。 */
+    fun continueApkInstallWithSystem(entryPath: String) {
+        apkInstallState = null
+        launchSystemInstaller(getApplication(), entryPath)
+        cleanupApkInfoTemp()
+    }
+
+    /** 成功弹窗「启动」：按包名启动已安装应用。 */
+    fun launchInstalledApk(packageName: String) {
+        if (packageName.isBlank()) return
+        val intent = getApplication<Application>().packageManager
+            .getLaunchIntentForPackage(packageName)
+        if (intent == null) {
+            Toast.makeText(getApplication(), "无法启动该应用", Toast.LENGTH_SHORT).show()
+            return
+        }
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            getApplication<Application>().startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(getApplication(), "启动失败: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** 以压缩包形式打开 .apks（zip）。 */

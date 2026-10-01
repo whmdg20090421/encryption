@@ -3388,7 +3388,18 @@ fun FileManagerScreen(
     vm.pendingApkEntry?.let { entry ->
         ApkInfoDialog(
             apkPath = entry.path,
-            onDismiss = { vm.dismissApkInfo() }
+            onDismiss = { vm.dismissApkInfo() },
+            onInstall = { vm.installApk(entry) }
+        )
+    }
+
+    // ── APK 安装结果弹窗 ──
+    vm.apkInstallState?.let { state ->
+        ApkInstallResultDialog(
+            state = state,
+            onDismiss = { vm.dismissApkInstall() },
+            onLaunch = { pkg -> vm.launchInstalledApk(pkg) },
+            onContinueWithSystem = { path -> vm.continueApkInstallWithSystem(path) }
         )
     }
 
@@ -6287,7 +6298,6 @@ private fun FastScrollBar(
     if (totalItems == 0 || totalItems <= visibleItems) return
 
     val scope = rememberCoroutineScope()
-    var trackHeight by remember { mutableIntStateOf(0) }
     var isDragging by remember { mutableStateOf(false) }
     var isTouching by remember { mutableStateOf(false) }
 
@@ -6320,19 +6330,20 @@ private fun FastScrollBar(
         }
     }
 
+    // 滑块高度比例随条目数/可视数变化。通过 rememberUpdatedState 暴露给手势协程，
+    // 使手势协程在垂直拖动期间不需要重建即可读到最新值。
     val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0.10f, 0.50f) * 0.8f
-    val thumbHeightPx = trackHeight * visibleFraction
+    val thumbFractionState = rememberUpdatedState(visibleFraction)
     val barColor = MaterialTheme.colorScheme.primary
 
     Box(
         modifier = modifier
             .width(20.dp)
-            .onSizeChanged { trackHeight = it.height }
             // 单一手势状态机：按下后先记录位置，垂直位移超过 slop 进入拖动，否则抬起视为点击跳转。
-            // 合并到同一个 pointerInput，避免拖动与点击互相抢夺指针事件（参照 AudioPlayerActivity）。
-            // key 包含 trackHeight：首次组合时 trackHeight 为 0，测量完成后需重建手势协程。
-            .pointerInput(totalItems, visibleItems, trackHeight) {
-                if (trackHeight <= 0) return@pointerInput
+            // 关键点：pointerInput 的 key 仅绑定 listState，拖动手势绝不因滚动导致的重组而重建；
+            // 轨道高度直接取自 PointerInputScope.size，条目数/可视数由 layoutInfo 在协程内实时读取，
+            // 避免拖动过程中因 key（如 trackHeight/visibleItems）变化取消协程而卡死。
+            .pointerInput(listState) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     // 独占本次手势，避免下层的 LazyColumn 抢走滚动/点击
@@ -6347,10 +6358,15 @@ private fun FastScrollBar(
                         if (!change.pressed) {
                             change.consume()
                             if (!dragging) {
-                                // 视为点击：按点击位置跳转
-                                val maxFirst = (totalItems - visibleItems).coerceAtLeast(0)
-                                val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
-                                val fraction = ((down.position.y - thumbHeightPx / 2f) / scrollablePx)
+                                // 视为点击：按点击位置跳转。所有尺寸/数量在抬手瞬间实时读取。
+                                val info = listState.layoutInfo
+                                val total = info.totalItemsCount
+                                val visible = info.visibleItemsInfo.size
+                                val trackH = size.height.toFloat()
+                                val thumbH = trackH * thumbFractionState.value
+                                val maxFirst = (total - visible).coerceAtLeast(0)
+                                val scrollablePx = (trackH - thumbH).coerceAtLeast(1f)
+                                val fraction = ((down.position.y - thumbH / 2f) / scrollablePx)
                                     .coerceIn(0f, 1f)
                                 scope.launch {
                                     listState.animateScrollToItem((fraction * maxFirst).roundToInt())
@@ -6369,8 +6385,10 @@ private fun FastScrollBar(
                         }
                         if (dragging) {
                             // 把滑块位移映射到列表的真实可滚动像素范围
-                            val totalScrollPx = totalScrollablePixels(listState, totalItems)
-                            val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
+                            val trackH = size.height.toFloat()
+                            val thumbH = trackH * thumbFractionState.value
+                            val totalScrollPx = totalScrollablePixels(listState)
+                            val scrollablePx = (trackH - thumbH).coerceAtLeast(1f)
                             val deltaPx = dy / scrollablePx * totalScrollPx
                             listState.dispatchRawDelta(deltaPx)
                             change.consume()
@@ -6382,6 +6400,7 @@ private fun FastScrollBar(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val barWidth = 4.dp.toPx()
             val x = (size.width - barWidth) / 2f
+            val thumbHeightPx = size.height * visibleFraction
             val thumbTop = progress * (size.height - thumbHeightPx)
             drawRoundRect(
                 color = barColor.copy(alpha = thumbAlpha),
@@ -6397,13 +6416,86 @@ private fun FastScrollBar(
  * 估算列表当前可滚动的总像素范围：所有已知条目按平均高度折算，再减去视口高度。
  * 用于把快速滚动条的拖动位移正确映射到像素增量（dispatchRawDelta 需要像素而非条目数）。
  */
-private fun totalScrollablePixels(listState: LazyListState, totalItems: Int): Float {
+private fun totalScrollablePixels(listState: LazyListState): Float {
     val info = listState.layoutInfo
     val visible = info.visibleItemsInfo
     if (visible.isEmpty()) return 0f
     val avgItemHeight = visible.sumOf { it.size }.toFloat() / visible.size
     val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
-    return (totalItems * avgItemHeight - viewport).coerceAtLeast(0f)
+    return (info.totalItemsCount * avgItemHeight - viewport).coerceAtLeast(0f)
+}
+
+/**
+ * APK 安装结果弹窗。
+ * - 成功：显示「启动」「关闭」，启动按包名唤起应用。
+ * - 失败：显示可滚动的报错原文（高度收窄），提供「关闭」与「继续」；
+ *   继续表示放弃静默安装、改为系统安装器，并先提醒用户。
+ */
+@Composable
+private fun ApkInstallResultDialog(
+    state: FileManagerViewModel.ApkInstallState,
+    onDismiss: () -> Unit,
+    onLaunch: (String) -> Unit,
+    onContinueWithSystem: (String) -> Unit
+) {
+    when (state) {
+        is FileManagerViewModel.ApkInstallState.Success -> {
+            StandardDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("安装成功") },
+                text = {
+                    Text(
+                        text = "${state.appName} 已安装完成。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                },
+                confirmButton = {
+                    TextButton(onClick = { onLaunch(state.packageName) }) { Text("启动") }
+                }
+            )
+        }
+
+        is FileManagerViewModel.ApkInstallState.Failed -> {
+            StandardDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("安装失败") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "静默安装未能完成，是否改用系统安装器继续？",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .verticalScroll(rememberScrollState())
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = state.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                },
+                confirmButton = {
+                    TextButton(onClick = { onContinueWithSystem(state.entryPath) }) { Text("继续") }
+                }
+            )
+        }
+    }
 }
 
 @Composable

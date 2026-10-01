@@ -122,7 +122,8 @@ fun loadApkInfo(context: Context, apkPath: String): ApkInfo? {
 fun ApkInfoDialog(
     apkPath: String,
     onDismiss: () -> Unit,
-    onViewAsArchive: () -> Unit = {}
+    onViewAsArchive: () -> Unit = {},
+    onInstall: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var apkInfo by remember(apkPath) { mutableStateOf<ApkInfo?>(null) }
@@ -167,7 +168,10 @@ fun ApkInfoDialog(
                 onViewAsArchive()
                 onDismiss()
             }) { Text("查看") }
-            TextButton(onClick = {}, enabled = false) { Text("安装") }
+            TextButton(onClick = {
+                onInstall()
+                onDismiss()
+            }) { Text("安装") }
         }
     )
 }
