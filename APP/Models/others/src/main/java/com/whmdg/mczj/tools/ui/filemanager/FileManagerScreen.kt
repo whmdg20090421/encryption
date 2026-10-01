@@ -6350,7 +6350,8 @@ private fun FastScrollBar(
                             isTouching = false
                             break
                         }
-                        totalDy += change.positionChange().y
+                        val dy = change.position.y - change.previousPosition.y
+                        totalDy += dy
                         if (!dragging && abs(totalDy) > touchSlop) {
                             dragging = true
                             isDragging = true
@@ -6359,7 +6360,7 @@ private fun FastScrollBar(
                             // 把滑块位移映射到列表的真实可滚动像素范围
                             val totalScrollPx = totalScrollablePixels(listState, totalItems)
                             val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
-                            val deltaPx = change.positionChange().y / scrollablePx * totalScrollPx
+                            val deltaPx = dy / scrollablePx * totalScrollPx
                             listState.dispatchRawDelta(deltaPx)
                             change.consume()
                         }
