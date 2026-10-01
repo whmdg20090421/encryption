@@ -64,6 +64,7 @@ import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -6383,6 +6384,9 @@ private fun FastScrollBar(
                     } else {
                         ((down.position.y - grabAnchor) / scrollablePx).coerceIn(0f, 1f)
                     }
+                    // scrollToItem 是挂起函数，只能在受限手势作用域外执行，这里用外部队列协程提交，
+                    // 并取消上一次未完成的滚动，避免连续拖动堆积协程。
+                    var scrollJob: Job? = null
                     if (dragging) {
                         isDragging = true
                         dragProgress = lastFraction
@@ -6418,7 +6422,9 @@ private fun FastScrollBar(
                             dragProgress = fraction
                             if (fraction != lastFraction) {
                                 lastFraction = fraction
-                                listState.scrollToItem((fraction * maxFirst).roundToInt())
+                                val target = (fraction * maxFirst).roundToInt()
+                                scrollJob?.cancel()
+                                scrollJob = scope.launch { listState.scrollToItem(target) }
                             }
                             change.consume()
                         }
