@@ -65,6 +65,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
@@ -97,6 +98,7 @@ import coil3.size.Size as CoilSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -6083,6 +6085,19 @@ private fun FileBrowserPanel(
     val context = LocalContext.current
     val isMultiSelectMode = selectedPaths.isNotEmpty()
 
+    // 为列表条目生成唯一 key。正常情况下 key 就是 "local_/path" 或 "cloud_/path"；
+    // 当同目录下出现两个 path 完全相同的条目（如系统 bug 导致同名同 inode）时，
+    // 后续重复项追加 "#2"、"#3"… 后缀，避免 LazyColumn 因 key 冲突而崩溃。
+    val entryKeys = remember(entries) {
+        val seen = HashMap<String, Int>(entries.size)
+        entries.map { entry ->
+            val base = (if (entry.isCloudOnly) "cloud_" else "local_") + entry.path
+            val n = (seen[base] ?: 0) + 1
+            seen[base] = n
+            if (n == 1) base else "$base#$n"
+        }
+    }
+
     // 视频缩略图：FIFO 队列 + 磁盘缓存
     val thumbCache = remember { mutableStateMapOf<String, ImageBitmap?>() }
     val submittedPaths = remember { mutableStateSetOf<String>() }
@@ -6172,12 +6187,7 @@ private fun FileBrowserPanel(
                         )
                     }
                 }
-                items(entries, key = {
-                    // 冲突文件会有两个条目（local + cloud），需要用不同的 key 区分
-                    if (it.isCloudOnly) "cloud_${it.path}" else "local_${it.path}"
-                }) { entry ->
-                    val entryIndex = entries.indexOfFirst { it.path == entry.path }
-
+                itemsIndexed(entries, key = { index, _ -> entryKeys[index] }) { entryIndex, entry ->
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
@@ -6268,56 +6278,92 @@ private fun FastScrollBar(
     val scope = rememberCoroutineScope()
     var trackHeight by remember { mutableIntStateOf(0) }
     var isDragging by remember { mutableStateOf(false) }
+    var isTouching by remember { mutableStateOf(false) }
 
     val isScrollInProgress by remember(listState) {
         derivedStateOf { listState.isScrollInProgress }
     }
+    // 滚动/拖动停止后保持可见 2 秒，避免松手瞬间消失导致无法再次抓住
+    var keepVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(isScrollInProgress, isTouching) {
+        if (isScrollInProgress || isTouching) {
+            keepVisible = true
+        } else {
+            delay(2000)
+            keepVisible = false
+        }
+    }
     val thumbAlpha by animateFloatAsState(
         targetValue = when {
             isDragging -> 0.7f
-            isScrollInProgress -> 0.4f
+            keepVisible -> 0.4f
             else -> 0f
         },
         label = "fastScrollAlpha"
     )
     val progress by remember(listState) {
         derivedStateOf {
-            val maxFirst = (totalItems - visibleItems).coerceAtLeast(1)
+            val maxFirst = (listState.layoutInfo.totalItemsCount -
+                listState.layoutInfo.visibleItemsInfo.size).coerceAtLeast(1)
             (listState.firstVisibleItemIndex.toFloat() / maxFirst).coerceIn(0f, 1f)
         }
     }
 
-    val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0.10f, 0.50f)
+    val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0.10f, 0.50f) * 0.8f
     val thumbHeightPx = trackHeight * visibleFraction
     val barColor = MaterialTheme.colorScheme.primary
 
     Box(
         modifier = modifier
-            .width(12.dp)
+            .width(20.dp)
             .onSizeChanged { trackHeight = it.height }
-            .pointerInput(totalItems, visibleItems, trackHeight, thumbHeightPx) {
+            // 单一手势状态机：按下后先记录位置，垂直位移超过 slop 进入拖动，否则抬起视为点击跳转。
+            // 合并到同一个 pointerInput，避免拖动与点击互相抢夺指针事件（参照 AudioPlayerActivity）。
+            // key 包含 trackHeight：首次组合时 trackHeight 为 0，测量完成后需重建手势协程。
+            .pointerInput(totalItems, visibleItems, trackHeight) {
                 if (trackHeight <= 0) return@pointerInput
-                detectVerticalDragGestures(
-                    onDragStart = { isDragging = true },
-                    onDragEnd = { isDragging = false },
-                    onDragCancel = { isDragging = false }
-                ) { change, dragAmount ->
-                    change.consume()
-                    val maxScrollPx = (totalItems - visibleItems).coerceAtLeast(0).toFloat()
-                    val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
-                    val deltaScroll = dragAmount / scrollablePx * maxScrollPx
-                    scope.launch { listState.dispatchRawDelta(deltaScroll) }
-                }
-            }
-            .pointerInput(totalItems, visibleItems, trackHeight, thumbHeightPx) {
-                if (trackHeight <= 0) return@pointerInput
-                detectTapGestures { offset ->
-                    val maxFirst = (totalItems - visibleItems).coerceAtLeast(0)
-                    val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
-                    val fraction = ((offset.y - thumbHeightPx / 2f) / scrollablePx)
-                        .coerceIn(0f, 1f)
-                    val targetIndex = (fraction * maxFirst).roundToInt()
-                    scope.launch { listState.animateScrollToItem(targetIndex) }
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // 独占本次手势，避免下层的 LazyColumn 抢走滚动/点击
+                    down.consume()
+                    isTouching = true
+                    val touchSlop = viewConfiguration.touchSlop
+                    var dragging = false
+                    var totalDy = 0f
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                        if (!change.pressed) {
+                            change.consume()
+                            if (!dragging) {
+                                // 视为点击：按点击位置跳转
+                                val maxFirst = (totalItems - visibleItems).coerceAtLeast(0)
+                                val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
+                                val fraction = ((down.position.y - thumbHeightPx / 2f) / scrollablePx)
+                                    .coerceIn(0f, 1f)
+                                scope.launch {
+                                    listState.animateScrollToItem((fraction * maxFirst).roundToInt())
+                                }
+                            } else {
+                                isDragging = false
+                            }
+                            isTouching = false
+                            break
+                        }
+                        totalDy += change.positionChange().y
+                        if (!dragging && abs(totalDy) > touchSlop) {
+                            dragging = true
+                            isDragging = true
+                        }
+                        if (dragging) {
+                            // 把滑块位移映射到列表的真实可滚动像素范围
+                            val totalScrollPx = totalScrollablePixels(listState, totalItems)
+                            val scrollablePx = (trackHeight - thumbHeightPx).coerceAtLeast(1f)
+                            val deltaPx = change.positionChange().y / scrollablePx * totalScrollPx
+                            listState.dispatchRawDelta(deltaPx)
+                            change.consume()
+                        }
+                    }
                 }
             }
     ) {
@@ -6333,6 +6379,19 @@ private fun FastScrollBar(
             )
         }
     }
+}
+
+/**
+ * 估算列表当前可滚动的总像素范围：所有已知条目按平均高度折算，再减去视口高度。
+ * 用于把快速滚动条的拖动位移正确映射到像素增量（dispatchRawDelta 需要像素而非条目数）。
+ */
+private fun totalScrollablePixels(listState: LazyListState, totalItems: Int): Float {
+    val info = listState.layoutInfo
+    val visible = info.visibleItemsInfo
+    if (visible.isEmpty()) return 0f
+    val avgItemHeight = visible.sumOf { it.size }.toFloat() / visible.size
+    val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
+    return (totalItems * avgItemHeight - viewport).coerceAtLeast(0f)
 }
 
 @Composable
@@ -6925,6 +6984,17 @@ private fun CloudPanelContent(
     val isDarkMode = LocalIsDarkMode.current
     val bgColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
 
+    // 同 FileBrowserPanel：为重复 path 追加序号后缀，避免 LazyColumn key 冲突崩溃
+    val cloudEntryKeys = remember(cloudState.entries) {
+        val seen = HashMap<String, Int>(cloudState.entries.size)
+        cloudState.entries.map { entry ->
+            val base = (if (entry.isCloudOnly) "cloud_" else "local_") + entry.relativePath
+            val n = (seen[base] ?: 0) + 1
+            seen[base] = n
+            if (n == 1) base else "$base#$n"
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -6992,10 +7062,7 @@ private fun CloudPanelContent(
                         )
                     }
                 }
-                items(cloudState.entries, key = {
-                    // 冲突文件会有两个条目（local + cloud），需要用不同的 key 区分
-                    if (it.isCloudOnly) "cloud_${it.relativePath}" else "local_${it.relativePath}"
-                }) { cloudEntry ->
+                itemsIndexed(cloudState.entries, key = { index, _ -> cloudEntryKeys[index] }) { _, cloudEntry ->
                     val fileEntry = FileEntry(
                         path = cloudEntry.relativePath,
                         name = cloudEntry.name,
