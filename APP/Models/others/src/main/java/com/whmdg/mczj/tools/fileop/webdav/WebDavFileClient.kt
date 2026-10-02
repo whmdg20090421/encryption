@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.fileop.webdav
 import at.bitfire.dav4jvm.exception.DavException
 import com.whmdg.mczj.tools.fileop.webdav.client.Client
 import com.whmdg.mczj.tools.fileop.webdav.client.DavPropfindEntry
+import com.whmdg.mczj.tools.fileop.webdav.client.WebDavClientPath
 import com.whmdg.mczj.tools.fileop.webdav.client.toDavException
 import com.whmdg.mczj.tools.fileop.webdav.client.isDirectory
 import com.whmdg.mczj.tools.fileop.webdav.client.lastModifiedTime

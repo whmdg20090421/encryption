@@ -226,7 +226,7 @@ object Client {
             .build()
         val response = getClient(path.authority).newCall(request).execute()
         response.use { resp ->
-            if (resp.code != HttpURLConnection.HTTP_MULTI_STATUS) {
+            if (resp.code != 207) {
                 throw IOException("PROPFIND(depth=$depth) HTTP ${resp.code} ${resp.message}")
             }
             val input = resp.body?.byteStream() ?: throw IOException("PROPFIND 响应无 body")
