@@ -6108,16 +6108,19 @@ private fun FileBrowserPanel(
     val context = LocalContext.current
     val isMultiSelectMode = selectedPaths.isNotEmpty()
 
-    // 为列表条目生成唯一 key。正常情况下 key 就是 "local_/path" 或 "cloud_/path"；
-    // 当同目录下出现两个 path 完全相同的条目（如系统 bug 导致同名同 inode）时，
-    // 后续重复项追加 "#2"、"#3"… 后缀，避免 LazyColumn 因 key 冲突而崩溃。
-    val entryKeys = remember(entries) {
+    // 为列表条目生成唯一 key，并让 key 与条目成对绑定在同一个列表中。
+    // 正常情况下 key 就是 "local_/path" 或 "cloud_/path"；当同目录下出现两个 path
+    // 完全相同的条目（如系统 bug 导致同名同 inode）时，后续重复项追加 "#2"、"#3"…。
+    // key 必须随条目一起携带，不能另建平行数组再按下标取：LazyColumn 在测量/预取
+    // 阶段可能用上一轮的行数回调 key，而平行数组已随新 entries 重建变短，两边不同步
+    // 时会越界（IndexOutOfBoundsException），与是否重名无关。
+    val keyedEntries = remember(entries) {
         val seen = HashMap<String, Int>(entries.size)
         entries.map { entry ->
             val base = (if (entry.isCloudOnly) "cloud_" else "local_") + entry.path
             val n = (seen[base] ?: 0) + 1
             seen[base] = n
-            if (n == 1) base else "$base#$n"
+            entry to if (n == 1) base else "$base#$n"
         }
     }
 
@@ -6210,7 +6213,7 @@ private fun FileBrowserPanel(
                         )
                     }
                 }
-                itemsIndexed(entries, key = { index, _ -> entryKeys[index] }) { entryIndex, entry ->
+                itemsIndexed(keyedEntries, key = { _, (_, k) -> k }) { entryIndex, (entry, _) ->
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
@@ -7110,14 +7113,16 @@ private fun CloudPanelContent(
     val isDarkMode = LocalIsDarkMode.current
     val bgColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
 
-    // 同 FileBrowserPanel：为重复 path 追加序号后缀，避免 LazyColumn key 冲突崩溃
-    val cloudEntryKeys = remember(cloudState.entries) {
+    // 同 FileBrowserPanel：为重复 path 追加序号后缀，并把 key 与条目成对绑定在同一列表。
+    // 云盘面板的 entries 会被后台高频整体替换（目录校验、silentRefresh、进度刷新等），
+    // 若另建平行数组再按下标取 key，替换瞬间两边长度不同步会越界；key 随条目携带即可根除。
+    val keyedCloudEntries = remember(cloudState.entries) {
         val seen = HashMap<String, Int>(cloudState.entries.size)
         cloudState.entries.map { entry ->
             val base = (if (entry.isCloudOnly) "cloud_" else "local_") + entry.relativePath
             val n = (seen[base] ?: 0) + 1
             seen[base] = n
-            if (n == 1) base else "$base#$n"
+            entry to if (n == 1) base else "$base#$n"
         }
     }
 
@@ -7188,7 +7193,7 @@ private fun CloudPanelContent(
                         )
                     }
                 }
-                itemsIndexed(cloudState.entries, key = { index, _ -> cloudEntryKeys[index] }) { _, cloudEntry ->
+                itemsIndexed(keyedCloudEntries, key = { _, (_, k) -> k }) { _, (cloudEntry, _) ->
                     val fileEntry = FileEntry(
                         path = cloudEntry.relativePath,
                         name = cloudEntry.name,
