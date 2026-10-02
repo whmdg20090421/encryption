@@ -197,8 +197,6 @@ class SyncEngine(
             failReason = null,
             originalName = originalName
         ))
-        // cloud_entries 快照已变更：刷新时戳，供云端/本地主从判定使用
-        syncDb.touchCloudDbTimestamp()
 
         // ④ 更新本地表 → COMPLETED（解锁）
         CloudSyncLogger.logSync("SyncEngine", "上传成功: $relativePath (大小: $fileSize)")

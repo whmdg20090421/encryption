@@ -248,42 +248,12 @@ fun CloudSyncScreen(
             val oldCloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
             val oldCloudSize = syncDb.getTotalSize("cloud_entries")
 
-            val result = CloudVaultCatalogSync.syncVaultDatabase(
+            val (success, configFile) = CloudVaultCatalogSync.downloadVaultDatabase(
                 context, client, config.relativePath, vaultName, syncDb
             )
-            val configFile = result.configFile
 
-            if (result.outcome == CloudVaultCatalogSync.VaultDbSyncOutcome.NO_CLOUD) {
+            if (!success) {
                 throw IllegalStateException("保险箱「${vaultName}」同步数据库恢复失败")
-            }
-            // 本地领先：以本地 cloud_entries 为准，回传覆盖云端滞后快照。
-            // 仅有本地保险箱记录时才能拿到 vault_config.json，否则跳过回传（导入已保证本地可用）。
-            if (result.outcome == CloudVaultCatalogSync.VaultDbSyncOutcome.LOCAL_LEADS) {
-                val vaultRecord = vaultService.vaults.find { it.name == vaultName }
-                if (vaultRecord != null) {
-                    syncDb.touchCloudDbTimestamp()
-                    val dbFile = java.io.File(
-                        java.io.File(
-                            com.whmdg.mczj.tools.AppDataPaths.encryption(context),
-                            "云盘同步/$vaultName"
-                        ),
-                        "vault_sync.db"
-                    )
-                    val localConfigFile = java.io.File(
-                        com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
-                            context, vaultRecord.location, vaultRecord.relativePath
-                        ),
-                        "vault_config.json"
-                    )
-                    CloudVaultCatalogSync.uploadVaultDatabase(
-                        context = context,
-                        client = client,
-                        configPath = config.relativePath,
-                        vaultName = vaultName,
-                        dbFile = dbFile,
-                        configFile = localConfigFile
-                    )
-                }
             }
 
             // 检查本地是否已存在该保险箱
@@ -623,8 +593,6 @@ fun CloudSyncScreen(
                 var showConcurrencyDialog by remember { mutableStateOf(false) }
                 var showDiffDialog by remember { mutableStateOf(false) }
                 var diffResult by remember { mutableStateOf<DiffScanResult?>(null) }
-                // 与云端对齐：正在对齐的保险箱（null=未开启）
-                var alignTarget by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var showDeleteWarning by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var showDeleteOptions by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var deleteScope by remember { mutableStateOf<String?>(null) }
@@ -794,37 +762,9 @@ fun CloudSyncScreen(
                                 onClick = { showConfirmDialog = item },
                                 onConcurrencyChange = { showConcurrencyDialog = true },
                                 onDiffRefresh = { showDiffDialog = true },
-                                onAlignWithCloud = { alignTarget = item },
                                 onDeleteVault = { showDeleteWarning = item }
                             )
                         }
-                    }
-
-                    // 与云端对齐对话框
-                    alignTarget?.let { target ->
-                        AlignWithCloudDialog(
-                            context = context,
-                            item = target,
-                            onComplete = {
-                                // 对齐已修改本地状态：刷新该卡片统计
-                                val idx = syncItems.indexOfFirst { it.id == target.id }
-                                if (idx >= 0) {
-                                    val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
-                                        context, target.vaultName
-                                    )
-                                    // 直接按 cloud_entries 现算，避免依赖可能滞后的 sync_stats
-                                    val cloudSize = syncDb.getTotalSize("cloud_entries")
-                                    val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
-                                    syncItems[idx] = syncItems[idx].copy(
-                                        cloudSize = cloudSize,
-                                        cloudFileCount = cloudFileCount,
-                                        lastSyncTime = java.time.Instant.now().toString()
-                                    )
-                                    CloudSyncStore.save(context, syncItems.toList())
-                                }
-                                alignTarget = null
-                            }
-                        )
                     }
 
                     // 并发数滑动条对话框
@@ -1888,7 +1828,6 @@ private fun CloudSyncCard(
     onClick: () -> Unit = {},
     onConcurrencyChange: (() -> Unit)? = null,
     onDiffRefresh: (() -> Unit)? = null,
-    onAlignWithCloud: (() -> Unit)? = null,
     onDeleteVault: (() -> Unit)? = null
 ) {
     val isDarkMode = LocalIsDarkMode.current
@@ -2019,13 +1958,6 @@ private fun CloudSyncCard(
                                     onClick = {
                                         showMenu = false
                                         onDiffRefresh?.invoke()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("与云端对齐") },
-                                    onClick = {
-                                        showMenu = false
-                                        onAlignWithCloud?.invoke()
                                     }
                                 )
                                 DropdownMenuItem(
@@ -2203,89 +2135,6 @@ private fun ConcurrencySliderDialog(
             }
         }
     }
-}
-
-// ── 与云端对齐对话框 ──
-
-@Composable
-private fun AlignWithCloudDialog(
-    context: Context,
-    item: CloudSyncItem,
-    onComplete: () -> Unit
-) {
-    val isDarkMode = LocalIsDarkMode.current
-    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
-    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
-
-    var running by remember { mutableStateOf(true) }
-    var phaseText by remember { mutableStateOf("准备对齐") }
-    var progress by remember { mutableFloatStateOf(0f) }
-    var resultText by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(Unit) {
-        val vaultService = com.whmdg.mczj.tools.encryption.services.VaultService(context)
-        vaultService.load()
-        val vaultRecord = vaultService.vaults.find { it.id == item.vaultId }
-        val webdavConfig = com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context).firstOrNull()
-        if (vaultRecord == null || webdavConfig == null) {
-            phaseText = "未找到保险箱或 WebDAV 配置"
-            running = false
-            return@LaunchedEffect
-        }
-        try {
-            val result = withContext(Dispatchers.IO) {
-                com.whmdg.mczj.tools.ui.encryption.CloudReconciler.align(
-                    context = context,
-                    vaultName = item.vaultName,
-                    webdavConfig = webdavConfig
-                ) { p ->
-                    withContext(Dispatchers.Main) {
-                        phaseText = p.phase
-                        progress = if (p.total > 0) p.current.toFloat() / p.total.toFloat() else 0f
-                    }
-                }
-            }
-            resultText = buildString {
-                appendLine("已核对目录：${result.checkedDirs} 个")
-                appendLine("云端已存在、补写索引：${result.restored} 个")
-                appendLine("云端不存在、重置待上传：${result.resetToPending} 个")
-                if (result.failedDirs > 0) appendLine("网络异常跳过目录：${result.failedDirs} 个")
-                append(if (result.uploadedDb) "云端索引已回传更新" else "云端索引无需回传")
-            }
-            phaseText = "对齐完成"
-        } catch (e: Exception) {
-            phaseText = "对齐失败: ${e.message}"
-        }
-        running = false
-    }
-
-    AlertDialog(
-        onDismissRequest = { if (!running) onComplete() },
-        title = { Text("与云端对齐") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(item.vaultName, fontSize = 13.sp, color = textColor, fontWeight = FontWeight.Medium)
-                if (running) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text(phaseText, fontSize = 13.sp, color = subTextColor)
-                    }
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    Text(resultText ?: phaseText, fontSize = 13.sp, color = subTextColor)
-                }
-            }
-        },
-        confirmButton = {
-            if (!running) {
-                TextButton(onClick = onComplete) { Text("关闭") }
-            }
-        }
-    )
 }
 
 // ── 差异文件扫描对话框 ──
@@ -2486,46 +2335,11 @@ private fun DiffScanDialog(
 
                             val remoteDbFile = java.io.File(extractDir, "vault_sync.db")
                             if (remoteDbFile.exists()) {
-                                // 主从判定：本地时戳严格领先云端时，保留本地 cloud_entries 并回传覆盖云端，
-                                // 避免用云端滞后快照覆盖本地已上传但未同步的记录。
-                                val remoteTs = syncDb.readCloudDbTimestampFromFile(remoteDbFile)
-                                val localTs = syncDb.getCloudDbTimestamp()
-                                val localLeads = localTs != null && (remoteTs == null || localTs > remoteTs)
-
-                                if (localLeads) {
-                                    syncDb.touchCloudDbTimestamp()
-                                    val uploaded = try {
-                                        com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
-                                            context = context,
-                                            client = webdavClient,
-                                            configPath = webdavConfig.relativePath,
-                                            vaultName = vaultName,
-                                            dbFile = java.io.File(
-                                                java.io.File(
-                                                    com.whmdg.mczj.tools.AppDataPaths.encryption(context),
-                                                    "云盘同步/$vaultName"
-                                                ),
-                                                "vault_sync.db"
-                                            ),
-                                            configFile = java.io.File(
-                                                com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
-                                                    context, vaultRecord.location, vaultRecord.relativePath
-                                                ),
-                                                "vault_config.json"
-                                            )
-                                        )
-                                        true
-                                    } catch (_: Exception) { false }
-                                    withContext(Dispatchers.Main) {
-                                        step2Text = if (uploaded) "本地领先，已回传云端数据库" else "本地领先，回传失败"
-                                    }
-                                } else {
-                                    // 云端数据库是权威全量快照：整表替换 cloud_entries（保留设备私有的 local_entries）。
-                                    // 不能用只增不删的逐行 upsert，否则云端已删除的文件会残留在本地，导致蓝色文件夹阴魂不散。
-                                    syncDb.importCloudEntriesFromFile(remoteDbFile)
-                                    withContext(Dispatchers.Main) {
-                                        step2Text = "合并云端数据完成"
-                                    }
+                                // 云端数据库是权威全量快照：整表替换 cloud_entries（保留设备私有的 local_entries）。
+                                // 不能用只增不删的逐行 upsert，否则云端已删除的文件会残留在本地，导致蓝色文件夹阴魂不散。
+                                syncDb.importCloudEntriesFromFile(remoteDbFile)
+                                withContext(Dispatchers.Main) {
+                                    step2Text = "合并云端数据完成"
                                 }
 
                                 // 更新元数据缓存

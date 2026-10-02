@@ -132,21 +132,8 @@ object CloudVaultCatalogSync {
         }
     }
 
-    /** 云端 DB 同步结果：云端权威已导入 / 本地权威需回传 / 云端不存在。 */
-    enum class VaultDbSyncOutcome { IMPORTED_CLOUD, LOCAL_LEADS, NO_CLOUD }
-
-    data class VaultDbSyncResult(
-        val outcome: VaultDbSyncOutcome,
-        val configFile: File? = null
-    )
-
     /**
-     * 从云端根目录 .sync_meta/ 下载保险箱同步数据库并按主从规则同步。
-     *
-     * 先解压读取云端快照内的 `cloud_db_updated_at`，与本地 `cloud_db_updated_at` 比较：
-     *  - 本地有、云端无时戳 → 本地领先（LOCAL_LEADS，调用方回传覆盖云端）；
-     *  - 本地有、云端有，且本地 > 云端 → LOCAL_LEADS；
-     *  - 其余（云端新/相等、仅云端有、双方皆无）→ 以云端为准导入，返回 IMPORTED_CLOUD。
+     * 从云端根目录 .sync_meta/ 下载保险箱同步数据库。
      *
      * 下载时检查本地缓存：若本地已有相同大小的文件，则跳过下载直接解压。
      *
@@ -155,15 +142,15 @@ object CloudVaultCatalogSync {
      * @param configPath WebDAV 配置路径
      * @param vaultName 保险箱名称（指定下载哪个保险箱的数据库）
      * @param targetDb 目标数据库实例（用于导入 cloud_entries）
-     * @return [VaultDbSyncResult]；云端文件不存在返回 NO_CLOUD，失败抛出异常
+     * @return Pair<成功标志, vault_config.json 文件路径?>，文件不存在返回 Pair(false, null)，失败抛出异常
      */
-    suspend fun syncVaultDatabase(
+    suspend fun downloadVaultDatabase(
         context: Context,
         client: WebDavFileClient,
         configPath: String,
         vaultName: String,
         targetDb: SyncDatabase
-    ): VaultDbSyncResult {
+    ): Pair<Boolean, File?> {
         val remotePath = vaultDbPath(configPath, vaultName)
         val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_download.db.7z")
         val extractDir = File(context.cacheDir, "vault_db_download_${vaultName}")
@@ -171,7 +158,7 @@ object CloudVaultCatalogSync {
             try {
                 // 检查云端文件是否存在
                 val exists = withTimeout(30_000L) { runInterruptible { client.exists(remotePath) } }
-                if (!exists) return@withContext VaultDbSyncResult(VaultDbSyncOutcome.NO_CLOUD)
+                if (!exists) return@withContext Pair(false, null)
 
                 // 获取云端文件元数据
                 val remoteMeta = withTimeout(30_000L) { runInterruptible { client.getFileMetadata(remotePath) } }
@@ -193,19 +180,11 @@ object CloudVaultCatalogSync {
                     ).getOrThrow()
                 }
 
+                // 导入 cloud_entries 到目标数据库
                 val sourceDb = File(extractDir, "vault_sync.db")
                 val sourceConfig = File(extractDir, "vault_config.json")
+
                 if (!sourceDb.exists()) throw IllegalStateException("解压后未找到 vault_sync.db")
-
-                // ── 主从判定：本地有、且严格领先于云端（或云端无时戳）时才回传 ──
-                val remoteTs = targetDb.readCloudDbTimestampFromFile(sourceDb)
-                val localTs = targetDb.getCloudDbTimestamp()
-                val localLeads = localTs != null && (remoteTs == null || localTs > remoteTs)
-                if (localLeads) {
-                    return@withContext VaultDbSyncResult(VaultDbSyncOutcome.LOCAL_LEADS)
-                }
-
-                // 云端权威：导入 cloud_entries（导入内部会把本地时戳同步为云端值）
                 targetDb.importCloudEntriesFromFile(sourceDb)
 
                 // 持久化 vault_config.json
@@ -217,7 +196,7 @@ object CloudVaultCatalogSync {
                     targetFile
                 } else null
 
-                VaultDbSyncResult(VaultDbSyncOutcome.IMPORTED_CLOUD, configFile)
+                Pair(true, configFile)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -258,8 +237,8 @@ object CloudVaultCatalogSync {
             onProgress(index + 1, vaultsToDownload.size, vaultName)
             val targetDb = SyncDatabase.getInstance(context, vaultName)
             try {
-                val result = syncVaultDatabase(context, client, configPath, vaultName, targetDb)
-                if (result.outcome != VaultDbSyncOutcome.NO_CLOUD) {
+                val (success, _) = downloadVaultDatabase(context, client, configPath, vaultName, targetDb)
+                if (success) {
                     successCount++
                 }
             } catch (_: Exception) {

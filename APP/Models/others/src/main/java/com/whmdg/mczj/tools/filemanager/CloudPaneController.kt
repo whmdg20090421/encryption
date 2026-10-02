@@ -1688,7 +1688,6 @@ class CloudPaneController(
                     // 删除云端表条目（递归删除子条目）
                     syncDb.deleteEntry("cloud_entries", relativePath)
                     syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
-                    syncDb.touchCloudDbTimestamp()
 
                     // 按条目颜色处理本地表：
                     //   绿色（local_entries 存在）→ 重置为待上传（红），清除残留进度
@@ -1789,7 +1788,6 @@ class CloudPaneController(
                     syncDb.deleteEntriesByPrefix("local_entries", relativePath)
                     syncDb.deleteEntry("cloud_entries", relativePath)
                     syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
-                    syncDb.touchCloudDbTimestamp()
 
                     // 更新统计
                     syncDb.adjustLocalStats(-deletedLocalCount, -deletedLocalSize)
@@ -2103,80 +2101,75 @@ class CloudPaneController(
         }
     }
 
-    /**
-     * 上传前检查云端 db 是否被其他设备更新，若是则按主从规则合并。
-     *
-     * 复用 [syncVaultDatabase]：本地时戳领先时保持本地（不导入滞后云端），
-     * 其余情况导入云端快照。
-     */
+    /** 上传前检查云端 db 是否被其他设备更新，若是则下载合并 */
     suspend fun syncCloudDbBeforeUpload() = withContext(Dispatchers.IO) {
         if (isCloudDbConsistent()) return@withContext
-        try {
-            val result = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.syncVaultDatabase(
-                context = context,
-                client = webdavClient,
-                configPath = webdavConfig.relativePath,
-                vaultName = vaultName,
-                targetDb = syncDb
-            )
-            when (result.outcome) {
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.IMPORTED_CLOUD -> {
-                    saveCloudDbMetaFromRemote()
-                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 已合并")
-                }
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.LOCAL_LEADS -> {
-                    // 本地领先：保留本地 cloud_entries，随后收尾上传会覆盖云端
-                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "本地云端索引领先，跳过合并")
-                }
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.NO_CLOUD -> Unit
-            }
-        } catch (e: Exception) {
-            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 合并失败: ${e.message}")
-        }
-    }
 
-    /**
-     * 下载并解压云端同步数据库，按主从规则同步 cloud_entries。
-     *
-     * 本地时戳领先时以本地为准并回传覆盖云端；否则导入云端。返回是否成功同步。
-     */
-    suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val result = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.syncVaultDatabase(
-                context = context,
-                client = webdavClient,
-                configPath = webdavConfig.relativePath,
-                vaultName = vaultName,
-                targetDb = syncDb
-            )
-
-            when (result.outcome) {
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.NO_CLOUD -> false
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.LOCAL_LEADS -> {
-                    // 本地领先：回传本地 cloud_entries 覆盖云端滞后快照
-                    val uploaded = uploadCloudDb(DbUploadFeedback.SILENT)
-                    if (uploaded) saveCloudDbMetaFromRemote()
-                    uploaded
-                }
-                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.IMPORTED_CLOUD -> {
-                    saveCloudDbMetaFromRemote()
-                    true
-                }
-            }
-        } catch (e: Exception) {
-            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端索引恢复失败: ${e.message}")
-            false
-        }
-    }
-
-    /** 读取云端 DB 文件元数据并缓存到本地。 */
-    private suspend fun saveCloudDbMetaFromRemote() {
+        // 云端 db 被更新过，下载并合并
         val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
             if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
             else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
         }
-        webdavClient.getFileMetadata(remotePath)?.let {
-            saveCloudDbMeta(it.size, it.lastModified)
+        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_remote.db.7z")
+        try {
+            webdavClient.downloadFile(remotePath, zipFile) { _ -> }
+
+            // 解压
+            val extractDir = File(context.cacheDir, "cloud_db_merge_${vaultName}")
+            extractDir.mkdirs()
+            com.whmdg.mczj.tools.util.JBindingClient.extractAll(
+                archivePath = zipFile.absolutePath,
+                outputDir = extractDir.absolutePath,
+                password = "mczj"
+            ).getOrThrow()
+
+            // 读取远程 db 的 cloud_entries，整表替换本地 cloud_entries（云端为权威快照）
+            val remoteDbFile = File(extractDir, "vault_sync.db")
+            if (remoteDbFile.exists()) {
+                syncDb.importCloudEntriesFromFile(remoteDbFile)
+            }
+
+            // 更新本地元数据
+            val remoteMeta = webdavClient.getFileMetadata(remotePath)
+            if (remoteMeta != null) {
+                saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+            }
+
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 已合并")
+        } catch (e: Exception) {
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 合并失败: ${e.message}")
+        } finally {
+            zipFile.delete()
+            File(context.cacheDir, "cloud_db_merge_${vaultName}").deleteRecursively()
+        }
+    }
+
+    /** 下载并解压云端同步数据库，将 cloud_entries 导入当前本地数据库。 */
+    suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            // 使用封装的下载函数
+            val (success, _) = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.downloadVaultDatabase(
+                context = context,
+                client = webdavClient,
+                configPath = webdavConfig.relativePath,
+                vaultName = vaultName,
+                targetDb = syncDb
+            )
+
+            if (success) {
+                // 保存远程元数据
+                val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                    if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                }
+                webdavClient.getFileMetadata(remotePath)?.let {
+                    saveCloudDbMeta(it.size, it.lastModified)
+                }
+            }
+            success
+        } catch (e: Exception) {
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端索引恢复失败: ${e.message}")
+            false
         }
     }
 
@@ -2250,8 +2243,6 @@ class CloudPaneController(
                         syncDb.upsertEntry("cloud_entries", entry)
                     }
                 }
-                // cloud_entries 已合并变更：刷新快照时戳
-                syncDb.touchCloudDbTimestamp()
             }
 
             // 更新本地元数据
@@ -2746,19 +2737,14 @@ class CloudPaneController(
                         dbUploaded = 0L
                     }
                 }
-                // 双表判定：本地 COMPLETED 且云端表存在该条目才算真正已同步。
-                // 仅本地标记完成、云端表缺失时视为未同步（红），由「与云端对齐」修正。
-                val inCloud = syncDb.getEntry("cloud_entries", childRelativePath) != null
                 val greenSize = when {
-                    status == SyncStatus.COMPLETED && inCloud -> fileSize
-                    status == SyncStatus.COMPLETED -> 0L
+                    status == SyncStatus.COMPLETED -> fileSize
                     liveProgress != null -> liveProgress.uploadedBytes
                     dbUploaded > 0 -> dbUploaded
                     else -> 0L
                 }
                 val redSize = when {
-                    status == SyncStatus.COMPLETED && inCloud -> 0L
-                    status == SyncStatus.COMPLETED -> fileSize
+                    status == SyncStatus.COMPLETED -> 0L
                     status == SyncStatus.UPLOADING -> 0L  // 剩余部分归入 yellow（uploading），不计入 red
                     else -> fileSize
                 }
@@ -2817,11 +2803,8 @@ class CloudPaneController(
             } else {
                 val dbEntry = syncDb.getEntry("local_entries", childPath)
                 val fileSize = dbEntry?.size ?: file.length()
-                // 双表判定：本地完成但云端表缺失时不计入绿色（与文件级判定一致）
-                val inCloud = dbEntry?.status == SyncStatus.COMPLETED &&
-                    syncDb.getEntry("cloud_entries", childPath) != null
                 when (dbEntry?.status) {
-                    SyncStatus.COMPLETED -> if (inCloud) uploadedSize += fileSize else redSize += fileSize
+                    SyncStatus.COMPLETED -> uploadedSize += fileSize
                     SyncStatus.UPLOADING -> {
                         val liveProgress = state.syncTask.fileProgress[childPath]
                         val dbUploaded = dbEntry?.uploadedSize ?: 0L
