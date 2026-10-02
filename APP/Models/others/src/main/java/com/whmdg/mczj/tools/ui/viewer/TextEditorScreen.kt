@@ -4,6 +4,7 @@ import android.graphics.Typeface
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
@@ -72,6 +74,10 @@ fun TextEditorScreen(
     var cursorColumn by remember { mutableStateOf(1) }
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
+    // 只读模式：默认关闭，勾选后禁用编辑（不弹输入法、不可输入/粘贴），
+    // 仍可滚动、缩放、长按选词与复制。通过 CodeEditor.setEditable 实现。
+    var readOnly by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
     // 脏状态基准：优先用撤销栈指针（O(1)），反射不可用时降级为内容比较
     var savedStackPointer by remember { mutableStateOf<Int?>(null) }
     var savedText by remember { mutableStateOf("") }
@@ -155,6 +161,13 @@ fun TextEditorScreen(
         }
     }
 
+    // 只读开关变化时同步到编辑器。setEditable(false) 会隐藏输入法并拒绝新的输入连接，
+    // 从根源上阻止弹出输入法与输入/粘贴；滚动、缩放、长按选词与复制不受影响。
+    // 每次重新进入编辑页默认只读关闭，故编辑器创建后按当前值再应用一次（remember 初值 false）。
+    LaunchedEffect(readOnly) {
+        editorRef?.setEditable(!readOnly)
+    }
+
     // 未保存时返回确认
     BackHandler {
         if (hasChanges) showSaveDialog = true else onBack()
@@ -235,8 +248,27 @@ fun TextEditorScreen(
                     IconButton(onClick = { /* 仅 UI，无功能 */ }) {
                         Icon(Icons.Default.Edit, contentDescription = "编辑")
                     }
-                    IconButton(onClick = { /* 仅 UI，无功能 */ }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                    Box {
+                        IconButton(onClick = { showSettingsMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "设置")
+                        }
+                        DropdownMenu(
+                            expanded = showSettingsMenu,
+                            onDismissRequest = { showSettingsMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("只读模式") },
+                                onClick = {
+                                    readOnly = !readOnly
+                                    showSettingsMenu = false
+                                },
+                                trailingIcon = {
+                                    if (readOnly) {
+                                        Icon(Icons.Default.Check, contentDescription = "已开启")
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -287,6 +319,7 @@ fun TextEditorScreen(
                         cursorColumn = event.left.column + 1
                     }
                     editorRef = this
+                    setEditable(!readOnly)
                     // 以打开时的状态作为脏状态基准
                     savedText = fileContent
                     savedStackPointer = UndoStackInspector.readStackPointer(this)
