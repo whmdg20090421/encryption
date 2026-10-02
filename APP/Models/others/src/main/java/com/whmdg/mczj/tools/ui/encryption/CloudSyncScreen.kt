@@ -2493,9 +2493,6 @@ private fun DiffScanDialog(
                                 val localLeads = localTs != null && (remoteTs == null || localTs > remoteTs)
 
                                 if (localLeads) {
-                                    // 本地领先：先并集合并云端独有条目（绝不丢云端记录），
-                                    // 再回传并集覆盖云端滞后快照。
-                                    syncDb.mergeCloudEntriesFromFile(remoteDbFile)
                                     syncDb.touchCloudDbTimestamp()
                                     val uploaded = try {
                                         com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(

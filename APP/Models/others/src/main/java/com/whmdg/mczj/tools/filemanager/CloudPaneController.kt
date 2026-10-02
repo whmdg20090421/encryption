@@ -2125,9 +2125,8 @@ class CloudPaneController(
                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 已合并")
                 }
                 com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.LOCAL_LEADS -> {
-                    // 本地领先：syncVaultDatabase 已把云端独有条目并集进本地 cloud_entries，
-                    // 随后收尾上传会回传并集覆盖云端，不会丢失云端记录
-                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "本地云端索引领先，已并集云端独有条目")
+                    // 本地领先：保留本地 cloud_entries，随后收尾上传会覆盖云端
+                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "本地云端索引领先，跳过合并")
                 }
                 com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.VaultDbSyncOutcome.NO_CLOUD -> Unit
             }

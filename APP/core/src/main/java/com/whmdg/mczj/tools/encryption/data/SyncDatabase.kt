@@ -550,47 +550,6 @@ class SyncDatabase private constructor(
         }
     }
 
-    /**
-     * 从解压出的云端 SQLite 文件「并集合并」cloud_entries，保留本地 local_entries。
-     *
-     * 与 [importCloudEntriesFromFile] 的全量替换不同，本方法只增不删：
-     *  - 保留本地全部条目（本设备已上传、云端快照尚未包含的记录）；
-     *  - 并入云端有、本地没有的条目（其他设备上传、本设备尚不知晓的记录）；
-     *  - 同路径以本地为准（本地时戳领先时本地更权威）。
-     *
-     * 用于主从判定为「本地领先」的场景：此时若用滞后/部分云端快照整表覆盖，
-     * 会把云端已有的记录抹掉，导致上传后云端数据反而变少；并集合并可保证两边
-     * 信息都不丢失，随后回传的并集即为云端全量。
-     */
-    fun mergeCloudEntriesFromFile(sourceFile: File) {
-        if (!sourceFile.exists()) return
-        val source = SQLiteDatabase.openDatabase(sourceFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            val remoteEntries = mutableListOf<SyncEntryRow>()
-            source.query("cloud_entries", null, null, null, null, null, "path").use { cursor ->
-                while (cursor.moveToNext()) remoteEntries.add(cursorToRow(cursor))
-            }
-            val localPaths = getAllEntries("cloud_entries").map { it.path }.toHashSet()
-            val db = writableDatabase
-            db.beginTransaction()
-            try {
-                for (entry in remoteEntries) {
-                    // 本地不存在该路径才写入；同路径以本地为准，避免本地新版本被云端旧值覆盖
-                    if (entry.path !in localPaths) {
-                        db.insertWithOnConflict(
-                            TABLE_CLOUD, null, rowToValues(entry, TABLE_CLOUD), SQLiteDatabase.CONFLICT_REPLACE
-                        )
-                    }
-                }
-                db.setTransactionSuccessful()
-            } finally {
-                db.endTransaction()
-            }
-        } finally {
-            source.close()
-        }
-    }
-
     /** 只读探测云端快照文件内的 cloud_db_updated_at，不修改本地库。 */
     fun readCloudDbTimestampFromFile(sourceFile: File): String? {
         if (!sourceFile.exists()) return null

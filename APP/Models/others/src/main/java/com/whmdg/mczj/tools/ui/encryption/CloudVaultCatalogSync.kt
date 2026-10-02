@@ -140,16 +140,6 @@ object CloudVaultCatalogSync {
         val configFile: File? = null
     )
 
-    /** 将解压出的 vault_config.json 复制到待处理目录，返回副本；源不存在返回 null。 */
-    private fun extractPendingConfig(context: Context, vaultName: String, sourceConfig: File): File? {
-        if (!sourceConfig.exists()) return null
-        val pendingDir = File(context.cacheDir, "pending_vault_configs")
-        pendingDir.mkdirs()
-        val targetFile = File(pendingDir, "${vaultName}.json")
-        sourceConfig.copyTo(targetFile, overwrite = true)
-        return targetFile
-    }
-
     /**
      * 从云端根目录 .sync_meta/ 下载保险箱同步数据库并按主从规则同步。
      *
@@ -157,9 +147,6 @@ object CloudVaultCatalogSync {
      *  - 本地有、云端无时戳 → 本地领先（LOCAL_LEADS，调用方回传覆盖云端）；
      *  - 本地有、云端有，且本地 > 云端 → LOCAL_LEADS；
      *  - 其余（云端新/相等、仅云端有、双方皆无）→ 以云端为准导入，返回 IMPORTED_CLOUD。
-     *
-     * LOCAL_LEADS 时先做并集合并（见 [SyncDatabase.mergeCloudEntriesFromFile]），
-     * 再返回 LOCAL_LEADS 让调用方回传并集，避免用非超集的本地数据覆盖云端造成记录丢失。
      *
      * 下载时检查本地缓存：若本地已有相同大小的文件，则跳过下载直接解压。
      *
@@ -210,28 +197,25 @@ object CloudVaultCatalogSync {
                 val sourceConfig = File(extractDir, "vault_config.json")
                 if (!sourceDb.exists()) throw IllegalStateException("解压后未找到 vault_sync.db")
 
-                // ── 主从判定：本地严格领先于云端（或云端无时戳）→ 本地权威 ──
-                // 关键：绝不在此直接返回、让调用方用本地 cloud_entries 覆盖云端。
-                // 本地时戳领先只代表"本设备有过新上传"，其 cloud_entries 未必是云端超集
-                // （可能缺其他设备上传的记录）。若直接覆盖，会把云端已有记录抹掉，
-                // 表现为"上传后云端文件数反而变少"。因此先做并集合并：保留本地全部，
-                // 并入云端独有条目，随后调用方回传的并集即为两边信息的全量。
+                // ── 主从判定：本地有、且严格领先于云端（或云端无时戳）时才回传 ──
                 val remoteTs = targetDb.readCloudDbTimestampFromFile(sourceDb)
                 val localTs = targetDb.getCloudDbTimestamp()
                 val localLeads = localTs != null && (remoteTs == null || localTs > remoteTs)
                 if (localLeads) {
-                    targetDb.mergeCloudEntriesFromFile(sourceDb)
-                    targetDb.touchCloudDbTimestamp()
-                    // 仍需返回 configFile，调用方据此回传并集覆盖云端滞后快照
-                    val configFile = extractPendingConfig(context, vaultName, sourceConfig)
-                    return@withContext VaultDbSyncResult(VaultDbSyncOutcome.LOCAL_LEADS, configFile)
+                    return@withContext VaultDbSyncResult(VaultDbSyncOutcome.LOCAL_LEADS)
                 }
 
                 // 云端权威：导入 cloud_entries（导入内部会把本地时戳同步为云端值）
                 targetDb.importCloudEntriesFromFile(sourceDb)
 
                 // 持久化 vault_config.json
-                val configFile = extractPendingConfig(context, vaultName, sourceConfig)
+                val configFile = if (sourceConfig.exists()) {
+                    val pendingDir = File(context.cacheDir, "pending_vault_configs")
+                    pendingDir.mkdirs()
+                    val targetFile = File(pendingDir, "${vaultName}.json")
+                    sourceConfig.copyTo(targetFile, overwrite = true)
+                    targetFile
+                } else null
 
                 VaultDbSyncResult(VaultDbSyncOutcome.IMPORTED_CLOUD, configFile)
             } catch (e: kotlinx.coroutines.CancellationException) {
