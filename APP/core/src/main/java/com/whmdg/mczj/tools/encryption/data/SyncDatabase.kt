@@ -20,7 +20,7 @@ class SyncDatabase private constructor(
 ) : SQLiteOpenHelper(context, dbFile.absolutePath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 7
+        private const val DB_VERSION = 8
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -54,6 +54,10 @@ class SyncDatabase private constructor(
         private const val TABLE_LOCAL = "local_entries"
         private const val TABLE_CLOUD = "cloud_entries"
         private const val TABLE_STATS = "sync_stats"
+        private const val TABLE_META = "sync_meta"
+
+        /** 本地 cloud_entries 快照最后变更时间（UTC ISO8601），用于云端/本地主从判定。 */
+        private const val KEY_CLOUD_DB_UPDATED_AT = "cloud_db_updated_at"
 
         /**
          * 关闭并移除指定同步目录的缓存实例，释放文件句柄。
@@ -181,6 +185,13 @@ class SyncDatabase private constructor(
             )
         """.trimIndent())
         db.execSQL("INSERT INTO sync_stats (id) VALUES (1)")
+
+        db.execSQL("""
+            CREATE TABLE sync_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """.trimIndent())
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -198,7 +209,24 @@ class SyncDatabase private constructor(
             db.execSQL("DROP TABLE IF EXISTS local_entries")
             db.execSQL("DROP TABLE IF EXISTS cloud_entries")
             db.execSQL("DROP TABLE IF EXISTS sync_stats")
+            db.execSQL("DROP TABLE IF EXISTS sync_meta")
             onCreate(db)
+            return
+        }
+        // v8：新增 sync_meta 表记录 cloud_entries 快照变更时戳，用于云端/本地主从判定。
+        // 不弃库重建：旧库数据全部保留，仅补建缺失的元数据表。
+        // 老库升级时若本地已有 cloud_entries 且尚无时戳，则补种为当前时刻：
+        // 遵循「云端无时戳时优先采用本地」的规则，避免首次同步被云端滞后快照覆盖。
+        if (oldVersion < 8) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT)")
+            val hasEntries = db.rawQuery("SELECT COUNT(*) FROM cloud_entries", null)
+                .use { if (it.moveToFirst()) it.getInt(0) > 0 else false }
+            if (hasEntries) {
+                db.execSQL(
+                    "INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)",
+                    arrayOf(KEY_CLOUD_DB_UPDATED_AT, java.time.Instant.now().toString())
+                )
+            }
         }
     }
 
@@ -514,8 +542,33 @@ class SyncDatabase private constructor(
                 while (cursor.moveToNext()) entries.add(cursorToRow(cursor))
             }
             replaceEntries("cloud_entries", entries)
+            // 导入后本地视作与云端一致：时戳随云端快照走（云端无时戳则保持本地原值，
+            // 由上层主从判定决定是否回传，避免无意义的本地时戳被清空）。
+            readCloudDbTimestampFromDb(source)?.let { setCloudDbTimestamp(it) }
         } finally {
             source.close()
+        }
+    }
+
+    /** 只读探测云端快照文件内的 cloud_db_updated_at，不修改本地库。 */
+    fun readCloudDbTimestampFromFile(sourceFile: File): String? {
+        if (!sourceFile.exists()) return null
+        val source = SQLiteDatabase.openDatabase(sourceFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        return try {
+            readCloudDbTimestampFromDb(source)
+        } finally {
+            source.close()
+        }
+    }
+
+    /** 从已打开的源库读取 cloud_db_updated_at；无 sync_meta 表或无记录返回 null。 */
+    private fun readCloudDbTimestampFromDb(source: SQLiteDatabase): String? {
+        val hasTable = source.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sync_meta'", null
+        ).use { it.moveToFirst() }
+        if (!hasTable) return null
+        source.query(TABLE_META, arrayOf("value"), "key = ?", arrayOf(KEY_CLOUD_DB_UPDATED_AT), null, null, null).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getString(0) else null
         }
     }
 
@@ -546,11 +599,20 @@ class SyncDatabase private constructor(
                 )
             """.trimIndent())
             snapshot.execSQL("CREATE INDEX idx_cloud_status ON cloud_entries(status)")
+            // sync_meta 随快照一并导出，使云端能读到本快照的变更时戳（主从判定的依据）。
+            snapshot.execSQL("CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT)")
             val entries = getAllEntries("cloud_entries")
             snapshot.beginTransaction()
             try {
                 for (entry in entries) {
                     snapshot.insertWithOnConflict("cloud_entries", null, rowToValues(entry, TABLE_CLOUD), SQLiteDatabase.CONFLICT_REPLACE)
+                }
+                getCloudDbTimestamp()?.let { ts ->
+                    snapshot.insertWithOnConflict(
+                        "sync_meta", null,
+                        ContentValues().apply { put("key", KEY_CLOUD_DB_UPDATED_AT); put("value", ts) },
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
                 }
                 snapshot.setTransactionSuccessful()
             } finally {
@@ -651,6 +713,7 @@ class SyncDatabase private constructor(
                 "SELECT COALESCE(SUM(size), 0) FROM $TABLE_LOCAL WHERE path NOT LIKE '%/'", null
             ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
 
+            val now = java.time.Instant.now().toString()
             db.execSQL(
                 """
                 UPDATE $TABLE_STATS SET
@@ -662,7 +725,13 @@ class SyncDatabase private constructor(
                     last_update = ?
                 WHERE id = 1
                 """.trimIndent(),
-                arrayOf(localCount, localSize, localCount, java.time.Instant.now().toString())
+                arrayOf(localCount, localSize, localCount, now)
+            )
+            // cloud_entries 已清空：刷新快照时戳
+            db.insertWithOnConflict(
+                TABLE_META, null,
+                ContentValues().apply { put("key", KEY_CLOUD_DB_UPDATED_AT); put("value", now) },
+                SQLiteDatabase.CONFLICT_REPLACE
             )
             db.setTransactionSuccessful()
         } finally {
@@ -835,6 +904,32 @@ class SyncDatabase private constructor(
             put("original_name", entry.originalName)
         }
     }
+
+    // ── 元数据（sync_meta）──
+
+    private fun getMeta(key: String): String? {
+        val db = readableDatabase
+        val cursor = db.query(TABLE_META, arrayOf("value"), "key = ?", arrayOf(key), null, null, null)
+        return cursor.use { if (it.moveToFirst()) it.getString(0) else null }
+    }
+
+    private fun setMeta(key: String, value: String) {
+        val db = writableDatabase
+        db.insertWithOnConflict(
+            TABLE_META, null,
+            ContentValues().apply { put("key", key); put("value", value) },
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    /** 读取本地 cloud_entries 快照的最后变更时戳（UTC ISO8601），无记录返回 null。 */
+    fun getCloudDbTimestamp(): String? = getMeta(KEY_CLOUD_DB_UPDATED_AT)
+
+    /** 写入本地 cloud_entries 快照的最后变更时戳（UTC ISO8601）。 */
+    fun setCloudDbTimestamp(iso: String) = setMeta(KEY_CLOUD_DB_UPDATED_AT, iso)
+
+    /** 以当前时刻刷新 cloud_entries 快照时戳。 */
+    fun touchCloudDbTimestamp() = setCloudDbTimestamp(java.time.Instant.now().toString())
 
     // ── 统计数据 ──
 
