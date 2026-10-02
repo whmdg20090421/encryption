@@ -22,8 +22,43 @@ import java.net.HttpURLConnection
 import java.nio.ByteBuffer
 
 @Throws(DavException::class, IOException::class)
-fun DavResource.getCompat(accept: String, headers: Headers?): InputStream =
-    get(accept, headers).also { checkStatus(it) }.body!!.byteStream()
+fun DavResource.getCompat(accept: String, headers: Headers?): InputStream {
+    val response = get(accept, headers)
+    if (!response.isSuccessful) {
+        logGetFailureDiagnostics(response)
+    }
+    return response.also { checkStatus(it) }.body!!.byteStream()
+}
+
+/**
+ * 诊断专用：GET 请求失败时记录最终响应 URL、完整重定向链与关键响应头。
+ * 不改变任何行为，仅在 checkStatus 抛异常前输出，供定位 403 来源
+ * （原始 webdav 请求 vs 302 跳转后的 CDN 直链）。
+ */
+internal fun logGetFailureDiagnostics(response: Response) {
+    try {
+        val chain = buildList {
+            var r: Response? = response
+            while (r != null) {
+                add("${r.code} ${r.request.method} ${r.request.url}")
+                r = r.priorResponse
+            }
+        }
+        val headers = response.headers.joinToString("; ") { "${it.first}=${it.second}" }
+        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
+            "WebDavDiag",
+            buildString {
+                appendLine("GET 失败诊断: HTTP ${response.code} ${response.message}")
+                appendLine("  最终 URL: ${response.request.url}")
+                appendLine("  请求头: Authorization=${response.request.header("Authorization")?.take(12)}...")
+                appendLine("  重定向链(近→远):")
+                chain.forEach { appendLine("    $it") }
+                appendLine("  响应头: $headers")
+            }
+        )
+    } catch (_: Exception) {
+    }
+}
 
 @Throws(DavException::class, IOException::class)
 fun DavResource.getRangeCompat(
