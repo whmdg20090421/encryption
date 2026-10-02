@@ -488,36 +488,22 @@ fun CloudSyncScreen(
                 if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
             } catch (_: Exception) { 0 }
 
-            // 检查是否存在同名的占位卡片（vaultId=0）
-            val pendingIndex = syncItems.indexOfFirst { it.vaultName == vault.name && it.vaultId == 0 }
-            if (pendingIndex >= 0) {
-                // 升级占位卡片为正式卡片
-                syncItems[pendingIndex] = syncItems[pendingIndex].copy(
-                    id = "vault_${vault.id}",
-                    vaultId = vault.id,
-                    vaultSize = localSize,
-                    localFileCount = localFileCount,
-                    cloudSize = stats.cloudSize,
-                    diffFileCount = stats.diffCount,
-                    lastSyncTime = stats.lastUpdate ?: syncItems[pendingIndex].lastSyncTime
-                )
-            } else {
-                // 新增卡片
-                val item = CloudSyncItem(
-                    id = "vault_${vault.id}",
-                    vaultId = vault.id,
-                    vaultName = vault.name,
-                    type = "保险箱",
-                    vaultSize = localSize,
-                    lastSyncTime = stats.lastUpdate ?: "未同步",
-                    cloudSize = stats.cloudSize,
-                    diffFileCount = stats.diffCount,
-                    localFileCount = localFileCount,
-                    cloudFileCount = stats.cloudFileCount
-                )
-                syncItems.add(item)
+            // 统一入口：按 ID / 同名残留卡片认领，避免重复 key
+            val existingCard = syncItems.firstOrNull {
+                it.id == "vault_${vault.id}" || (it.type == "保险箱" && it.vaultName == vault.name)
             }
-            CloudSyncStore.save(context, syncItems.toList())
+            upsertVaultCard(
+                context = context,
+                syncItems = syncItems,
+                record = vault,
+                vaultSize = localSize,
+                lastSyncTime = stats.lastUpdate ?: existingCard?.lastSyncTime ?: "未同步",
+                cloudSize = stats.cloudSize,
+                diffFileCount = stats.diffCount,
+                webdavPath = accountState.config?.relativePath ?: "",
+                localFileCount = localFileCount,
+                cloudFileCount = stats.cloudFileCount
+            )
         }
     }
 
@@ -2784,6 +2770,52 @@ private fun DiffResultDialog(
     }
 }
 
+/**
+ * 写入/更新保险箱同步卡片，保证同一 ID 不出现重复项（重复 key 会让 LazyColumn 直接崩溃）。
+ *
+ * 匹配顺序：
+ * 1. 同 ID 卡片（`vault_<id>`）→ 原地更新；
+ * 2. 同名「保险箱」卡片（本地删除后残留的云端卡片）→ 原地认领升级；
+ * 3. 都没有 → 追加新卡片。
+ *
+ * 完成后立即持久化，避免刷新/重启后重复项再次落盘。
+ */
+private fun upsertVaultCard(
+    context: Context,
+    syncItems: androidx.compose.runtime.snapshots.SnapshotStateList<CloudSyncItem>,
+    record: VaultRecord,
+    vaultSize: Long,
+    lastSyncTime: String,
+    cloudSize: Long,
+    diffFileCount: Int,
+    webdavPath: String,
+    localFileCount: Int?,
+    cloudFileCount: Int?
+) {
+    val newId = "vault_${record.id}"
+    val byId = syncItems.indexOfFirst { it.id == newId }
+    val target = if (byId >= 0) {
+        byId
+    } else {
+        syncItems.indexOfFirst { it.type == "保险箱" && it.vaultName == record.name }
+    }
+    val updated = CloudSyncItem(
+        id = newId,
+        vaultId = record.id,
+        vaultName = record.name,
+        type = "保险箱",
+        vaultSize = vaultSize,
+        lastSyncTime = lastSyncTime,
+        cloudSize = cloudSize,
+        diffFileCount = diffFileCount,
+        webdavPath = webdavPath,
+        localFileCount = localFileCount,
+        cloudFileCount = cloudFileCount
+    )
+    if (target >= 0) syncItems[target] = updated else syncItems.add(updated)
+    CloudSyncStore.save(context, syncItems.toList())
+}
+
 /** 从待处理信息创建本地保险箱 */
 private suspend fun createVaultFromPending(
     context: Context,
@@ -2829,11 +2861,10 @@ private suspend fun createVaultFromPending(
 
             // 创建云盘同步卡片
             withContext(Dispatchers.Main) {
-                syncItems.add(CloudSyncItem(
-                    id = "vault_${vaultRecord.id}",
-                    vaultId = vaultRecord.id,
-                    vaultName = pending.vaultName,
-                    type = "保险箱",
+                upsertVaultCard(
+                    context = context,
+                    syncItems = syncItems,
+                    record = vaultRecord,
                     vaultSize = 0L,
                     lastSyncTime = pending.stats.lastUpdate ?: "未同步",
                     cloudSize = pending.stats.cloudSize,
@@ -2841,8 +2872,7 @@ private suspend fun createVaultFromPending(
                     webdavPath = webdavPath,
                     localFileCount = 0,
                     cloudFileCount = pending.stats.cloudFileCount
-                ))
-                CloudSyncStore.save(context, syncItems.toList())
+                )
             }
         } else {
             // 文件路径模式
@@ -2867,11 +2897,10 @@ private suspend fun createVaultFromPending(
 
             // 创建云盘同步卡片
             withContext(Dispatchers.Main) {
-                syncItems.add(CloudSyncItem(
-                    id = "vault_${vaultRecord.id}",
-                    vaultId = vaultRecord.id,
-                    vaultName = pending.vaultName,
-                    type = "保险箱",
+                upsertVaultCard(
+                    context = context,
+                    syncItems = syncItems,
+                    record = vaultRecord,
                     vaultSize = 0L,
                     lastSyncTime = pending.stats.lastUpdate ?: "未同步",
                     cloudSize = pending.stats.cloudSize,
@@ -2879,8 +2908,7 @@ private suspend fun createVaultFromPending(
                     webdavPath = webdavPath,
                     localFileCount = 0,
                     cloudFileCount = pending.stats.cloudFileCount
-                ))
-                CloudSyncStore.save(context, syncItems.toList())
+                )
             }
         }
     } finally {

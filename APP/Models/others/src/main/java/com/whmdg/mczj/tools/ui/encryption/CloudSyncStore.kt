@@ -23,7 +23,7 @@ object CloudSyncStore {
         val json = prefs(context).getString(KEY_SYNC_ITEMS, null) ?: return emptyList()
         return try {
             val arr = JSONArray(json)
-            (0 until arr.length()).mapNotNull { i ->
+            val items = (0 until arr.length()).mapNotNull { i ->
                 val obj = arr.getJSONObject(i)
                 CloudSyncItem(
                     id = obj.getString("id"),
@@ -39,6 +39,9 @@ object CloudSyncStore {
                     cloudFileCount = if (obj.has("cloudFileCount")) obj.optInt("cloudFileCount") else null
                 )
             }
+            // 按 id 去重：历史版本可能已把重复卡片落盘，重复 key 会让 LazyColumn 直接崩溃。
+            // 保留后出现的条目（覆盖旧的）以保证列表不因历史脏数据崩溃。
+            items.associateBy { it.id }.values.toList()
         } catch (_: Exception) {
             emptyList()
         }
