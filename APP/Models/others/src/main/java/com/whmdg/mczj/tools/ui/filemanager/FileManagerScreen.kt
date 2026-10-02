@@ -1882,7 +1882,10 @@ fun FileManagerScreen(
                 val errorInfo = cloudStateForOverlay.errorDialogInfo
                 if (errorInfo != null) {
                     Dialog(
-                        onDismissRequest = { cloudStateForOverlay.errorDialogInfo = null },
+                        onDismissRequest = {
+                            cloudStateForOverlay.errorDialogInfo = null
+                            cloudStateForOverlay.onErrorDialogDismiss?.invoke()
+                        },
                         properties = DialogProperties(usePlatformDefaultWidth = false)
                     ) {
                         Card(
@@ -1935,7 +1938,10 @@ fun FileManagerScreen(
                                         android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
                                     }) { Text("复制") }
                                     Spacer(Modifier.width(8.dp))
-                                    TextButton(onClick = { cloudStateForOverlay.errorDialogInfo = null }) { Text("关闭") }
+                                    TextButton(onClick = {
+                                        cloudStateForOverlay.errorDialogInfo = null
+                                        cloudStateForOverlay.onErrorDialogDismiss?.invoke()
+                                    }) { Text("关闭") }
                                 }
                             }
                         }

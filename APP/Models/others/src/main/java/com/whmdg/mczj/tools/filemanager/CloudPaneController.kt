@@ -23,6 +23,7 @@ import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.withLock
+import kotlin.coroutines.resume
 import java.io.File
 import java.time.Instant
 import com.whmdg.mczj.tools.AppDataPaths
@@ -136,6 +137,11 @@ class CloudPaneController(
         var anomalyDialogInfo by mutableStateOf<AnomalyDialogInfo?>(null)
         /** 操作失败错误弹窗（为 null 时隐藏） */
         var errorDialogInfo by mutableStateOf<ErrorDialogInfo?>(null)
+        /**
+         * 错误弹窗关闭回调（为 null 时不生效）。
+         * 下载失败时置位，用于挂起串行下载循环，等用户关闭弹窗后再继续。
+         */
+        var onErrorDialogDismiss: (() -> Unit)? = null
         /** 上传功能是否被禁用（用户取消下载覆盖时设置） */
         var uploadDisabled by mutableStateOf(false)
         /** 文件夹大小异常：需要重新计算的路径集合 */
@@ -1604,17 +1610,26 @@ class CloudPaneController(
                         withContext(Dispatchers.IO) {
                             syncDb.updateStatus("local_entries", relPath, SyncStatus.PAUSED, "下载失败")
                         }
-                        state.errorDialogInfo = ErrorDialogInfo(
-                            title = "下载失败",
-                            message = "下载文件失败：$fileName",
-                            detail = buildString {
-                                appendLine("操作: 下载单个文件")
-                                appendLine("文件: $fileName")
-                                appendLine("路径: $relPath")
-                                appendLine("原因: 云端文件下载或校验未通过")
-                                appendLine("时间: ${java.time.LocalDateTime.now()}")
+                        // 暂停整个串行下载：弹错误框并挂起当前协程，等用户关闭弹窗后再继续处理后续文件。
+                        // 避免在用户尚未查看报错时继续下载，造成"错误一闪而过"或漏看。
+                        suspendCancellableCoroutine<Unit> { cont ->
+                            state.errorDialogInfo = ErrorDialogInfo(
+                                title = "下载失败",
+                                message = "下载文件失败：$fileName",
+                                detail = buildString {
+                                    appendLine("操作: 下载单个文件")
+                                    appendLine("文件: $fileName")
+                                    appendLine("路径: $relPath")
+                                    appendLine("原因: 云端文件下载或校验未通过")
+                                    appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                }
+                            )
+                            state.onErrorDialogDismiss = {
+                                state.onErrorDialogDismiss = null
+                                if (cont.isActive) cont.resume(Unit)
                             }
-                        )
+                            cont.invokeOnCancellation { state.onErrorDialogDismiss = null }
+                        }
                     }
 
                     // 清理本文件的内存进度
@@ -1682,6 +1697,8 @@ class CloudPaneController(
             job?.join()
             closeProgressDialog()
             state.downloadConflictDialog = null
+            state.errorDialogInfo = null
+            state.onErrorDialogDismiss = null
             state.syncTask = SyncTaskState()
             state.onCancelUpload = null
             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()

@@ -20,7 +20,7 @@ class SyncDatabase private constructor(
 ) : SQLiteOpenHelper(context, dbFile.absolutePath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 7
+        private const val DB_VERSION = 8
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
