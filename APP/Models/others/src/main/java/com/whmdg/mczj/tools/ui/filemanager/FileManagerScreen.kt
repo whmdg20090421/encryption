@@ -886,10 +886,10 @@ fun FileManagerScreen(
             return@BackHandler
         }
         if (!saveScrollAndGoUp()) {
-            // 在根目录按返回：回收站退出模式；保险箱内一律提示密钥销毁；其余退出文件管理器
-            if (vm.recycleBinPanel == vm.focusedPanel) {
-                vm.exitRecycleBin()
-            } else if (vm.isVaultMode) {
+            // 已无上一级：保险箱内一律提示密钥销毁；其余退出文件管理器
+            // （回收站根目录的 goUp 会返回进入前位置，由 saveScrollAndGoUp 处理，
+            //   不会走到这里，故卡片与系统返回手势行为完全一致）
+            if (vm.isVaultMode) {
                 showVaultExitDialog = true
             } else {
                 onBack()
@@ -925,7 +925,6 @@ fun FileManagerScreen(
                                 if (session.currentPath == archivePath) session.archiveName
                                 else "${session.archiveName} / ${session.currentPath.removePrefix(archivePath).trimStart('/')}"
                             } ?: "压缩包"
-                            vm.recycleBinPanel == vm.focusedPanel -> "回收站"
                             vm.panels.isCloudMode && vm.focusedPanel == FocusedPanel.LEFT -> {
                                 val cloudPath = vm.panels.cloud?.state?.currentPath ?: "/"
                                 val vaultName = vm.panels.cloud?.state?.vaultFolderName ?: ""
@@ -1461,7 +1460,6 @@ fun FileManagerScreen(
                 } else {
                     // 按面板索引计算父路径（云盘模式使用云盘面板的 currentPath）
                     val cloudCurrentPath = vm.panels.cloud?.state?.currentPath
-                    val recycleBinRootPath = AppDataPaths.recycleBin(context).absolutePath
                     val parentPaths = FocusedPanel.entries.map { side ->
                         if (side == FocusedPanel.LEFT && vm.panels.isCloudMode && cloudCurrentPath != null) {
                             // 云盘模式：基于云盘面板的 currentPath 计算
@@ -1469,12 +1467,7 @@ fun FileManagerScreen(
                             else cloudCurrentPath.substringBeforeLast('/', "").ifEmpty { "/" }
                         } else {
                             val panel = vm.panels[side.panelId].state
-                            computeParentPath(
-                                panelPath = panel.path,
-                                isRecycleBinPanel = vm.recycleBinPanel == side,
-                                recycleBinPath = panel.recycleBinPath,
-                                recycleBinRootPath = recycleBinRootPath
-                            )
+                            computeParentPath(panel.path)
                         }
                     }
 
@@ -1539,7 +1532,7 @@ fun FileManagerScreen(
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         if (rightPanel.isInArchiveMode) {
                                             vm.navigateInArchive(entry)
-                                        } else if (vm.recycleBinPanel == vm.focusedPanel) {
+                                        } else if (rightPanel.path is PanelPath.RecycleBin) {
                                             vm.navigateInRecycleBin(entry)
                                         } else {
                                             listStates[1].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
@@ -1619,7 +1612,7 @@ fun FileManagerScreen(
                                         vm.focusedPanel = side
                                         if (panel.isInArchiveMode) {
                                             vm.navigateInArchive(entry)
-                                        } else if (vm.recycleBinPanel == vm.focusedPanel) {
+                                        } else if (panel.path is PanelPath.RecycleBin) {
                                             vm.navigateInRecycleBin(entry)
                                         } else {
                                             DiagnosticLog.beginSession("[$side] 点击文件夹 '${entry.name}'")
@@ -2563,6 +2556,8 @@ fun FileManagerScreen(
                 exit = fadeOut()
             ) {
                 val isToRight = vm.focusedPanel == FocusedPanel.LEFT
+                val sourceIsVault = vm.currentPanel.path is PanelPath.Vault
+                val targetIsVault = vm.otherPanel.path is PanelPath.Vault
                 val activeSelectedPaths = vm.currentPanel.selectedPaths
                 val isMultiSelect = activeSelectedPaths.size > 1
                 val selectedEntries = vm.currentPanel.entries.filter { it.path in vm.currentPanel.selectedPaths }
@@ -2800,8 +2795,13 @@ fun FileManagerScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 左列：复制 / 解压（压缩包模式下显示"解压"）
-                                val copyLabel = if (isArchiveSource) "解压" else "复制"
+                                // 左列：复制 / 解压 / 解密 / 加密
+                                val copyLabel = when {
+                                    isArchiveSource -> "解压"
+                                    sourceIsVault && !targetIsVault -> "解密"
+                                    !sourceIsVault && targetIsVault -> "加密"
+                                    else -> "复制"
+                                }
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -2849,8 +2849,13 @@ fun FileManagerScreen(
                                     }
                                 }
                                 VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                                // 右列：移动（压缩包模式下禁用）
+                                // 右列：移动 / 解密后删除 / 加密并删除（压缩包模式下禁用）
                                 val canMove = !isArchiveSource
+                                val moveLabel = when {
+                                    sourceIsVault && !targetIsVault -> "解密后删除"
+                                    !sourceIsVault && targetIsVault -> "加密并删除"
+                                    else -> "移动"
+                                }
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -2875,13 +2880,13 @@ fun FileManagerScreen(
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("移动", style = MaterialTheme.typography.bodyLarge, color = if (canMove) Color.Unspecified else disabledColor)
+                                            Text(moveLabel, style = MaterialTheme.typography.bodyLarge, color = if (canMove) Color.Unspecified else disabledColor)
                                             Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canMove) MaterialTheme.colorScheme.onSurface else disabledIconColor)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canMove) MaterialTheme.colorScheme.onSurface else disabledIconColor)
-                                            Text("移动", style = MaterialTheme.typography.bodyLarge, color = if (canMove) Color.Unspecified else disabledColor)
+                                            Text(moveLabel, style = MaterialTheme.typography.bodyLarge, color = if (canMove) Color.Unspecified else disabledColor)
                                         }
                                     }
                                 }
@@ -6013,21 +6018,14 @@ fun FileManagerScreen(
     }
 }
 
-/** 计算指定面板的"返回上一级"路径，null 表示不显示。 */
-private fun computeParentPath(
-    panelPath: PanelPath,
-    isRecycleBinPanel: Boolean,
-    recycleBinPath: String,
-    recycleBinRootPath: String
-): String? {
-    if (isRecycleBinPanel) {
-        if (recycleBinPath == recycleBinRootPath) return null
-        return java.io.File(recycleBinPath).parentFile?.absolutePath?.let { p ->
-            if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
-        }
-    }
-    return panelPath.goUp()?.displayPath
-}
+/**
+ * 计算指定面板的"返回上一级"路径，null 表示不显示。
+ *
+ * 直接使用 [PanelPath.goUp]，回收站与普通目录走同一逻辑：
+ * 卡片显示与点击执行因此共享同一状态来源，不会出现"显示有上一级但点了没反应"。
+ */
+private fun computeParentPath(panelPath: PanelPath): String? =
+    panelPath.goUp()?.displayPath
 
 /**
  * 视频缩略图加载：先查统一缓存索引，未命中则用 Coil 提取首帧并写入缓存。

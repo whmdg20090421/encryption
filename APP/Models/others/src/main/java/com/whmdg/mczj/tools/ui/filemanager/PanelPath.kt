@@ -41,6 +41,38 @@ sealed class PanelPath {
         }
     }
 
+    // ── 回收站 ──
+
+    /**
+     * 回收站视图。将回收站纳入统一导航模型：当前层级由 [path] 单一承载，
+     * 地址栏显示、返回上一级、系统返回手势全部读取同一来源，避免出现
+     * "显示的是回收站、导航读的是普通路径"这类状态分裂。
+     *
+     * @param path    回收站内当前绝对路径（root 或其子目录）
+     * @param root    回收站根目录绝对路径
+     * @param returnTo 进入回收站前的位置，用于在根目录 goUp 时退出回收站
+     */
+    data class RecycleBin(
+        val path: String,
+        val root: String,
+        val returnTo: PanelPath
+    ) : PanelPath() {
+        override val displayPath: String
+            get() = if (path == root) "回收站"
+            else "回收站 / ${path.removePrefix("$root/").trimStart('/')}"
+
+        override val fileSystemPath: String get() = path
+        override val scrollKey: String get() = "bin:$path"
+        override val isAtRoot: Boolean get() = path == root
+
+        override fun goUp(): PanelPath? {
+            if (path == root) return returnTo
+            val parent = path.substringBeforeLast('/').ifEmpty { "/" }
+            if (parent == path) return null
+            return copy(path = parent)
+        }
+    }
+
     // ── 保险箱目录 ──
 
     data class Vault(

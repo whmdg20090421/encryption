@@ -877,9 +877,11 @@ class CopyJob(
             for (src in sources) {
                 val srcFile = File(src)
                 if (srcFile.isDirectory) {
+                    // 目录本身也要在目标端重建，故输出根为 targetDir/<源目录名>
+                    val dirRoot = File(targetDir, srcFile.name)
                     srcFile.walkTopDown().filter { it.isFile }.forEach { file ->
                         val relParent = file.parentFile?.relativeTo(srcFile)?.path?.replace('\\', '/') ?: ""
-                        val outputDir = if (relParent.isEmpty()) File(targetDir) else File(targetDir, relParent)
+                        val outputDir = if (relParent.isEmpty()) dirRoot else File(dirRoot, relParent)
                         add(DecryptItem(file, outputDir))
                     }
                 } else {
@@ -1460,6 +1462,16 @@ class CopyJob(
                 "$targetDir/$targetName"
             }
 
+            // 目标为「已存在的同名目录」时不能直接 mv：
+            // mv 会把源目录整个塞进目标目录里（B/A/A），而非合并。改为逐项递归合并，
+            // 同名子目录继续下钻，同名文件弹冲突（跳过/覆盖）。
+            if (sourceIsDir && operator.exists(targetPath) && operator.isDirectory(targetPath)) {
+                val result = mergeMoveDirectory(node, targetPath, scanInfo, movedBytes, processedNodes)
+                movedBytes += result.bytes
+                processedNodes += result.files
+                continue
+            }
+
             // 冲突检查
             val resolvedTarget = resolveConflictIfNeeded(node, targetName, targetPath, isDirectory = sourceIsDir)
                 ?: continue
@@ -1496,6 +1508,80 @@ class CopyJob(
                 fileCount = scanInfo.fileCount
             ))
         }
+    }
+
+    /**
+     * 目录合并式移动：源目录 [source] 与已存在的目标目录 [targetDir] 合并。
+     *
+     * 与复制合并语义一致，但每个子项成功处理后删除源侧内容：
+     * - 同名子目录 → 继续递归合并；
+     * - 同名子文件 → 弹冲突（跳过/覆盖），勾选自动处理后记忆选择；
+     * - 目标不存在的子项 → 直接 mv 快速移动；
+     * - 全部子项处理完，删除已清空的源目录。
+     *
+     * [baseBytes]/[baseFiles] 仅用于 UI 进度基准；返回本次实际移动的增量（delta），
+     * 由调用方累加，避免与外部运行总量重复计数。
+     */
+    private fun mergeMoveDirectory(
+        source: String,
+        targetDir: String,
+        scanInfo: ScanInfo,
+        baseBytes: Long,
+        baseFiles: Int
+    ): CopyResult {
+        var movedBytes = 0L
+        var movedFiles = 0
+
+        val children = operator.listChildren(source) ?: return CopyResult(0, 0)
+        for (child in children) {
+            throwIfCancelled()
+            val childTarget = "$targetDir/${child.name}"
+
+            if (child.isDir && operator.exists(childTarget) && operator.isDirectory(childTarget)) {
+                // 子目录同名：递归合并
+                val result = mergeMoveDirectory(
+                    child.path, childTarget, scanInfo, baseBytes + movedBytes, baseFiles + movedFiles
+                )
+                movedBytes += result.bytes
+                movedFiles += result.files
+                continue
+            }
+
+            // 冲突检查：文件（或目标为已存在文件）时弹窗；目录目标不存在时无冲突
+            val resolvedTarget = resolveConflictIfNeeded(child.path, child.name, childTarget, isDirectory = child.isDir)
+                ?: continue // 用户跳过：保留源，不删除
+
+            currentStep = "移动: ${child.name}"
+            val childSize = if (child.isDir) 0L else operator.fileSize(child.path)
+            try {
+                operator.moveFile(child.path, resolvedTarget, onProgress = { copied ->
+                    heartbeat()
+                    manager.updateProgress(FileOpProgress(
+                        phase = "正在移动",
+                        currentBytes = baseBytes + movedBytes + copied,
+                        totalBytes = scanInfo.totalBytes,
+                        currentFileName = child.name,
+                        fileIndex = baseFiles + movedFiles,
+                        fileCount = scanInfo.fileCount
+                    ))
+                }, job = this)
+            } catch (e: Exception) {
+                throw IOException("移动失败: ${child.name}", e)
+            }
+            movedBytes += childSize
+            movedFiles++
+        }
+
+        // 子项全部处理完，删除已清空的源目录（跳过项会使其非空，此时不删）
+        try {
+            if (operator.listChildren(source)?.isEmpty() == true) {
+                operator.deleteFile(source)
+            }
+        } catch (_: Exception) {
+            // 删除失败不致命
+        }
+
+        return CopyResult(movedBytes, movedFiles)
     }
 
     /**

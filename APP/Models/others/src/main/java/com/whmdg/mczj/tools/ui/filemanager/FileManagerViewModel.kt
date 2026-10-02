@@ -238,8 +238,6 @@ class FilePaneController(
             internal set
         var selectedPaths by mutableStateOf(setOf<String>())
             internal set
-        var isInRecycleBin by mutableStateOf(false)
-            internal set
 
         // ── 压缩包浏览（会话栈，栈顶=当前层，栈底持进入前的真实目录） ──
         var archiveStack by mutableStateOf<List<ArchiveBrowser.ArchiveSession>>(emptyList())
@@ -317,10 +315,6 @@ class FilePaneController(
          * 仅在一次刷新加载期间有效，消费后即清空。
          */
         internal var refreshAnchorName: String? = null
-
-        // ── 回收站路径 ──
-        var recycleBinPath by mutableStateOf("")
-            internal set
 
         internal var loadJob: Job? = null
         internal var loadMetadataJob: Job? = null
@@ -1271,7 +1265,6 @@ class FilePaneController(
         scrollSeed: Pair<Int, Int>? = null
     ) {
         val panel = state
-        if (panel.isInRecycleBin) panel.isInRecycleBin = false
         val vaultDir = (panel.path as? PanelPath.Vault)?.vaultDir
         val panelPath: PanelPath = if (vaultDir != null) PanelPath.Vault(path, vaultDir)
         else PanelPath.FileSystem(path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
@@ -1289,7 +1282,16 @@ class FilePaneController(
     }
 
     fun navigateToWithScroll(path: PanelPath, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
-        navigateTo(path.fileSystemPath, scrollSeed = scrollToIndex to scrollToOffset)
+        val panel = state
+        if (panel.path == path) {
+            if (scrollToIndex != 0 || scrollToOffset != 0) {
+                panel.setInitialScroll(scrollToIndex, scrollToOffset)
+                panel.listGeneration++
+            }
+            return
+        }
+        panel.navState = panel.navState.navigate(path)
+        navigateToPanelPath(path, panel, scrollToIndex to scrollToOffset)
     }
 
     /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径。scrollPositionOf 由上层提供以恢复目标滚动。 */
@@ -1321,13 +1323,24 @@ class FilePaneController(
     }
 
     /** 根据 PanelPath 类型执行导航 */
-    private fun navigateToPanelPath(panelPath: PanelPath, panel: VmPanelState, scrollSeed: Pair<Int, Int>? = null) {
+    internal fun navigateToPanelPath(panelPath: PanelPath, panel: VmPanelState, scrollSeed: Pair<Int, Int>? = null) {
         when (panelPath) {
             is PanelPath.FileSystem -> {
                 loadDirectory(panelPath.path, panel = panel, panelPath = panelPath, scrollSeed = scrollSeed)
             }
             is PanelPath.Vault -> {
                 loadDirectory(panelPath.path, panel = panel, panelPath = panelPath, scrollSeed = scrollSeed)
+            }
+            is PanelPath.RecycleBin -> {
+                // 回收站内容由 Java File API 直接列举，不经过 shell 列目录
+                panel.loadJob?.cancel()
+                panel.loadVersion++
+                panel.setInitialScroll(scrollSeed?.first ?: 0, scrollSeed?.second ?: 0)
+                panel.resetTransientState()
+                panel.path = panelPath
+                panel.isLoading = false
+                panel.entries = listRecycleBinDir(File(panelPath.path))
+                panel.listGeneration++
             }
         }
     }
@@ -2346,7 +2359,21 @@ class FilePaneController(
         return null
     }
 
-    /** 在回收站内进入子文件夹 */
+    /**
+     * 进入回收站视图。把当前位置表达为 [PanelPath.RecycleBin] 并压入导航历史，
+     * 使 path / 地址栏 / 返回上一级 / 系统返回手势共用同一状态来源。
+     */
+    fun enterRecycleBin() {
+        val panel = state
+        val root = AppDataPaths.recycleBin(context).absolutePath
+        // 已在回收站内时（如永久删除后回调），只回到回收站根，保留原 returnTo，避免嵌套。
+        val returnTo = (panel.path as? PanelPath.RecycleBin)?.returnTo ?: panel.path
+        val target = PanelPath.RecycleBin(path = root, root = root, returnTo = returnTo)
+        panel.navState = panel.navState.navigate(target)
+        navigateToPanelPath(target, panel, null)
+    }
+
+    /** 在回收站内进入子文件夹：导航到 RecycleBin(path=子目录)，保留 root 与 returnTo。 */
     fun navigateInRecycleBin(entry: FileEntry) {
         if (!entry.isDirectory) return
         val dir = java.io.File(entry.path)
@@ -2354,20 +2381,23 @@ class FilePaneController(
             Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
             return
         }
-        val panel = state
-        panel.recycleBinPath = entry.path
-        panel.entries = listRecycleBinDir(dir)
+        val current = state.path as? PanelPath.RecycleBin ?: return
+        val target = current.copy(path = entry.path)
+        state.navState = state.navState.navigate(target)
+        navigateToPanelPath(target, state, null)
     }
 
-    /** 在回收站内返回上一级 */
-    fun goUpInRecycleBin(): Boolean {
-        val panel = state
-        val binRoot = AppDataPaths.recycleBin(context).absolutePath
-        if (panel.recycleBinPath == binRoot) return false
-        val parent = java.io.File(panel.recycleBinPath).parentFile ?: return false
-        panel.recycleBinPath = parent.absolutePath
-        panel.entries = listRecycleBinDir(parent)
-        return true
+    /**
+     * 在回收站内返回上一级。基于 [PanelPath.RecycleBin.goUp] 计算目标：
+     * 非根目录回其父目录，根目录回 [PanelPath.RecycleBin.returnTo]（退出回收站）。
+     * 返回目标路径，null 表示无法返回。
+     */
+    fun goUpInRecycleBin(): PanelPath? {
+        val current = state.path as? PanelPath.RecycleBin ?: return null
+        val target = current.goUp() ?: return null
+        state.navState = state.navState.navigate(target)
+        navigateToPanelPath(target, state, null)
+        return target
     }
 
     /**
@@ -2681,6 +2711,10 @@ class FilePaneController(
             is PanelPath.Vault -> {
                 loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed, anchorName = anchor)
             }
+            is PanelPath.RecycleBin -> {
+                panel.entries = listRecycleBinDir(File(p.path))
+                panel.listGeneration++
+            }
         }
     }
 
@@ -2820,8 +2854,9 @@ class PanelCoordinator(
             dst.archiveStack = emptyList()
         }
 
+        // 路径同步即原子替换目标当前位置；回收站目标被覆盖后，回收站状态随 path 一并消失
         dst.navState = dst.navState.navigate(srcPath)
-        dstCtrl.loadDirectory(srcPath.fileSystemPath, panel = dst, panelPath = srcPath)
+        dstCtrl.navigateToPanelPath(srcPath, dst, null)
     }
 
     fun refreshBoth() {
@@ -2846,6 +2881,10 @@ class PanelCoordinator(
                 }
                 is PanelPath.Vault -> {
                     ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed, anchorName = anchor)
+                }
+                is PanelPath.RecycleBin -> {
+                    panel.entries = ctrl.listRecycleBinDir(File(p.path))
+                    panel.listGeneration++
                 }
             }
         }
@@ -3199,14 +3238,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
     internal val archivePasswordCache = mutableMapOf<String, String>()
 
-    // ── 回收站（面板级路径已移入 VmPanelState） ──
-    /** 向后兼容：当前聚焦面板的回收站路径 */
-    val recycleBinPath: String get() = currentPanel.recycleBinPath
-    /** 向后兼容：哪个面板处于回收站视图 */
+    // ── 回收站（已纳入 PanelPath.RecycleBin，状态派生自 path） ──
+    /** 向后兼容：当前聚焦面板的回收站路径（不在回收站时为空串） */
+    val recycleBinPath: String get() = (currentPanel.path as? PanelPath.RecycleBin)?.path ?: ""
+    /** 哪个面板处于回收站视图，null 表示两个面板都不在回收站 */
     val recycleBinPanel: FocusedPanel?
         get() = when {
-            左.isInRecycleBin -> FocusedPanel.LEFT
-            右.isInRecycleBin -> FocusedPanel.RIGHT
+            左.path is PanelPath.RecycleBin -> FocusedPanel.LEFT
+            右.path is PanelPath.RecycleBin -> FocusedPanel.RIGHT
             else -> null
         }
     var jxlPackZip by mutableStateOf(false)
@@ -3426,9 +3465,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return result
     }
     fun isAtVaultRoot(): Boolean = focusedController.isAtVaultRoot()
-    /** String 便捷重载，供 Screen 层直接传路径字符串使用 */
+    /** String 便捷重载，供 Screen 层直接传路径字符串使用。
+     *  走 navigateTo 以便按当前面板（含保险箱上下文）解析出正确的 PanelPath 类型。 */
     fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) =
-        focusedController.navigateToWithScroll(PanelPath.FileSystem(path), scrollToIndex, scrollToOffset)
+        focusedController.navigateTo(path, scrollSeed = scrollToIndex to scrollToOffset)
     /** String 便捷重载 */
     fun getScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel): Pair<Int, Int>? =
         focusedController.getScrollPosition(path)
@@ -3496,7 +3536,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun exitArchive() = panels.exitArchive()
     fun isAtArchiveRoot(): Boolean = panels.isAtArchiveRoot()
     fun navigateInRecycleBin(entry: FileEntry) = focusedController.navigateInRecycleBin(entry)
-    fun goUpInRecycleBin(): Boolean = focusedController.goUpInRecycleBin()
+    fun goUpInRecycleBin(): PanelPath? = focusedController.goUpInRecycleBin()
     fun forceOpenExternalFile(context: Context, entry: FileEntry): String? = focusedController.forceOpenExternalFile(context, entry)
     private fun getMimeType(fileName: String): String = focusedController.getMimeType(fileName)
     private fun normalizePath(path: String): String = focusedController.normalizePath(path)
@@ -4326,27 +4366,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 进入回收站视图：将聚焦面板的 entries 替换为回收站内容。
+     * 进入回收站视图：将聚焦面板的当前位置切换为 [PanelPath.RecycleBin]。
      */
     fun enterRecycleBin() {
         loadRecycleBinMeta()
-        val binDir = AppDataPaths.recycleBin(context)
-        val panel = currentPanel
-        panel.recycleBinPath = binDir.absolutePath
-        panel.isInRecycleBin = true
-        panel.entries = focusedController.listRecycleBinDir(binDir)
+        focusedController.enterRecycleBin()
     }
 
-
-
     /**
-     * 退出回收站视图，恢复到正常目录浏览。
+     * 退出回收站视图，回到进入回收站前的位置。
      */
     fun exitRecycleBin() {
         val panel = currentPanel
-        panel.isInRecycleBin = false
-        panel.recycleBinPath = ""
-        refreshCurrent()
+        val current = panel.path as? PanelPath.RecycleBin ?: return
+        val target = current.returnTo
+        panel.navState = panel.navState.navigate(target)
+        focusedController.navigateToPanelPath(target, panel, null)
     }
 
     // ── 设置 ──
@@ -4370,8 +4405,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
         val panel = currentPanel
-        if (panel.isInRecycleBin) {
-            panel.entries = focusedController.listRecycleBinDir(java.io.File(recycleBinPath))
+        if (panel.path is PanelPath.RecycleBin) {
+            panel.entries = focusedController.listRecycleBinDir(java.io.File(panel.path.fileSystemPath))
         } else {
             val lp = 左.path; loadDirectory(lp.fileSystemPath, panel = 左, isRefresh = true, panelPath = lp)
             val rp = 右.path; loadDirectory(rp.fileSystemPath, panel = 右, isRefresh = true, panelPath = rp)
@@ -4382,8 +4417,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         sortOrder = order
         fmPrefs.edit().putString("sort_order", order.name).apply()
         val panel = currentPanel
-        if (panel.isInRecycleBin) {
-            panel.entries = focusedController.listRecycleBinDir(java.io.File(recycleBinPath))
+        if (panel.path is PanelPath.RecycleBin) {
+            panel.entries = focusedController.listRecycleBinDir(java.io.File(panel.path.fileSystemPath))
         } else {
             val lp = 左.path; loadDirectory(lp.fileSystemPath, panel = 左, isRefresh = true, panelPath = lp)
             val rp = 右.path; loadDirectory(rp.fileSystemPath, panel = 右, isRefresh = true, panelPath = rp)
@@ -5030,6 +5065,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             is PanelPath.Vault -> {
                 panel.entries = listDirectory(p.path)
                 loadExtFlagsForDir(p.path, panel = panel)
+            }
+            is PanelPath.RecycleBin -> {
+                panel.entries = focusedController.listRecycleBinDir(File(p.path))
             }
         }
     }
