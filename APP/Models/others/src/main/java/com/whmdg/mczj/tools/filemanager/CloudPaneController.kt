@@ -581,6 +581,13 @@ class CloudPaneController(
         }
     }
 
+    /** 判断整树对账异常是否表示"远端资源不存在"（可安全视为空树）。 */
+    private fun isNotFoundError(e: Exception): Boolean {
+        if (e is at.bitfire.dav4jvm.exception.NotFoundException) return true
+        val msg = e.message?.lowercase() ?: return false
+        return msg.contains("404") || msg.contains("not found")
+    }
+
     /** 上传文件夹：对比本地文件与 DB → 用户决策 → 并发上传 */
     private fun uploadFolder(folderRelativePath: String) {
         // 冗余措施：先终止旧上传协程（如果还在运行）
@@ -679,38 +686,98 @@ class CloudPaneController(
                 }
             }
 
-            // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在，且明文 SHA-256 不同
+            // ⑥ 整树对账：一次拉取远端该文件夹的整棵子树，取代逐文件的 exists()/listChildren 探测。
+            //    对账结果用于（a）预标记远端已存在的目录、（b）集中收集同名冲突，
+            //    之后上传阶段以 preChecked=true 直接 PUT，不再产生任何探测请求。
             val conflicts = mutableListOf<ConflictFileInfo>()
             val skippedByHash = mutableSetOf<String>()  // 明文 SHA-256 相同自动跳过的文件
+            // 整树对账失败（infinity 与 Depth:1 回退都拿不到云端信息）时置为错误信息，
+            // 随后直接终止本次上传，不回退逐文件探测（避免上千次无谓请求后再失败）。
+            var reconcileFailure: Exception? = null
             withContext(Dispatchers.IO) {
-                for ((_, relPath) in toUpload) {
-                    val localEntry = syncDb.getEntry("local_entries", relPath)
-                    val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
+                val folderRemoteBase = if (folderRelativePath == "/" || folderRelativePath.isEmpty()) {
+                    remoteBasePath
+                } else {
+                    "$remoteBasePath/${folderRelativePath.trimStart('/')}"
+                }
+                val remoteTree = try {
+                    webdavClient.fetchRemoteTree(folderRemoteBase)
+                } catch (e: Exception) {
+                    if (isNotFoundError(e)) {
+                        // 远端文件夹尚不存在 → 等价于空树
+                        emptyList()
+                    } else {
+                        reconcileFailure = e
+                        com.whmdg.mczj.tools.util.DiagnosticLog.log(
+                            "CloudPane", "整树对账失败（含 Depth:1 回退）: ${e.message}"
+                        )
+                        null
+                    }
+                }
 
-                    if (localEntry != null && localEntry.status == SyncStatus.PENDING && cloudEntry != null) {
-                        val localContentHash = localEntry.contentHash
-                        val cloudContentHash = cloudEntry.contentHash
-                        if (localContentHash != null && localContentHash == cloudContentHash) {
-                            // 明文 SHA-256 相同 → 同一文件，标记为已同步
+                // 远端树节点路径相对查询目录；统一投影为「相对 remoteBasePath」的键，
+                // 与 toUpload 的 vault 相对路径（去掉前导 '/'）对齐。
+                val folderRel = folderRelativePath.trimStart('/').trimEnd('/')
+                fun toVaultRel(nodeRel: String): String =
+                    if (folderRel.isEmpty()) nodeRel else "$folderRel/$nodeRel"
+
+                if (remoteTree != null) {
+                    // 远端已存在的目录预先标记 dir_created，使后续 ensureRemoteDir 零 MKCOL
+                    for (node in remoteTree) {
+                        if (node.isDirectory) {
+                            syncDb.setDirCreated("$folderRemoteBase/${node.relativePath}".trimEnd('/'), true)
+                        }
+                    }
+                    val remoteByRel = HashMap<String, com.whmdg.mczj.tools.fileop.webdav.RemoteTreeEntry>(remoteTree.size)
+                    for (node in remoteTree) {
+                        if (!node.isDirectory) remoteByRel[toVaultRel(node.relativePath)] = node
+                    }
+
+                    for ((file, relPath) in toUpload) {
+                        val remote = remoteByRel[relPath.trimStart('/')]
+                        if (remote == null) continue  // 远端不存在 → 直接上传
+                        val localEntry = syncDb.getEntry("local_entries", relPath)
+                        val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
+                        val localHash = localEntry?.contentHash
+                        val cloudHash = cloudEntry?.contentHash
+                        if (remote.size == file.length() && localHash != null && localHash == cloudHash) {
+                            // 大小与明文指纹一致 → 同一文件，标记为已同步
                             syncDb.updateEntry("local_entries", relPath) { entry ->
-                                entry.copy(
-                                    status = SyncStatus.COMPLETED,
-                                    lastSyncTime = Instant.now().toString()
-                                )
+                                entry.copy(status = SyncStatus.COMPLETED, lastSyncTime = Instant.now().toString())
                             }
                             skippedByHash.add(relPath)
                         } else {
                             conflicts.add(ConflictFileInfo(
                                 path = relPath,
-                                localSize = localEntry.size,
-                                localModified = localEntry.lastModified,
-                                cloudSize = cloudEntry.size,
-                                cloudModified = cloudEntry.lastModified,
-                                reasons = listOf("SHA-256 不同")
+                                localSize = file.length(),
+                                localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
+                                cloudSize = remote.size,
+                                cloudModified = Instant.ofEpochMilli(remote.lastModified).toString(),
+                                reasons = if (remote.size != file.length()) listOf("大小不同") else listOf("SHA-256 不同")
                             ))
                         }
                     }
                 }
+            }
+
+            // 对账彻底失败：报网络错误、终止本次上传（不进入上传阶段）
+            if (reconcileFailure != null) {
+                val err = reconcileFailure!!
+                state.errorDialogInfo = ErrorDialogInfo(
+                    title = "获取云端信息失败",
+                    message = "无法读取云端文件夹信息：${err.message ?: err.javaClass.simpleName}",
+                    detail = buildString {
+                        appendLine("操作: 上传前整树对账")
+                        appendLine("文件夹: $folderRelativePath")
+                        appendLine("远端路径: $remoteBasePath")
+                        appendLine("错误类型: ${err.javaClass.name}")
+                        appendLine("错误信息: ${err.message}")
+                        appendLine("时间: ${java.time.LocalDateTime.now()}")
+                    }
+                )
+                com.whmdg.mczj.tools.util.DiagnosticLog.log("CloudPane", "整树对账失败，终止本次上传: ${err.message}")
+                forceTerminate()
+                return@launch
             }
 
             // 若有冲突，询问用户是否覆盖
@@ -1302,7 +1369,9 @@ class CloudPaneController(
                                 },
                                 onStatusChange = {
                                     eventChannel.trySend(UploadEvent.StatusChange(relPath))
-                                }
+                                },
+                                // 能走到上传阶段说明整树对账已成功，直接 PUT，不再逐文件探测
+                                preChecked = true
                             )
                         } finally {
                             activeWorkers--

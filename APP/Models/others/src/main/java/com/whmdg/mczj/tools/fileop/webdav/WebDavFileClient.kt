@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.fileop.webdav
 
 import at.bitfire.dav4jvm.exception.DavException
 import com.whmdg.mczj.tools.fileop.webdav.client.Client
+import com.whmdg.mczj.tools.fileop.webdav.client.DavPropfindEntry
 import com.whmdg.mczj.tools.fileop.webdav.client.toDavException
 import com.whmdg.mczj.tools.fileop.webdav.client.isDirectory
 import com.whmdg.mczj.tools.fileop.webdav.client.lastModifiedTime
@@ -175,7 +176,84 @@ class WebDavFileClient(private val config: WebDavServerConfig) {
         val rootPath = config.getDisplayPath()
         Client.findCollectionMembers(rootPath)
     }
+
+    /**
+     * 一次性拉取某目录下的整棵子树。
+     *
+     * 优先用 `PROPFIND Depth: infinity` 一条请求拿回所有后代；服务端不支持
+     * （返回非 207，如 403）时自动回退到逐级 `Depth: 1` 递归遍历，行为一致。
+     *
+     * 返回路径均相对于 [remotePath]（不含前导 '/'），根自身不出现在结果里。
+     * 目录也包含在内，便于调用方预先标记 remote dir 已创建。
+     */
+    fun fetchRemoteTree(remotePath: String): List<RemoteTreeEntry> {
+        val base = path(remotePath)
+        val entries = try {
+            Client.propfindRaw(base, "infinity")
+        } catch (e: IOException) {
+            val msg = e.message ?: ""
+            when {
+                // 服务端明确不支持 Depth: infinity（403/405 等）→ 递归 Depth:1 兜底
+                msg.contains("HTTP 403") || msg.contains("HTTP 405") ||
+                    msg.contains("HTTP 400") || msg.contains("HTTP 501") -> {
+                    val acc = mutableListOf<DavPropfindEntry>()
+                    walkDepth1(base, acc)
+                    acc
+                }
+                // 其余（404 不存在 / 网络错误）向上抛出，交由调用方判定
+                else -> throw e
+            }
+        }
+        // 用 WebDavPath 归一化后的路径（含前导 '/'）做前缀匹配，避免调用方传入
+        // 不带前导 '/' 的 remotePath 时 projectTree 匹配失败。
+        return projectTree(base.toString(), entries)
+    }
+
+    /** Depth:1 递归兜底：逐目录列直接子项，聚合成整棵树。 */
+    private fun walkDepth1(nodeBase: WebDavClientPath, acc: MutableList<DavPropfindEntry>) {
+        val nodeNorm = normalizePath(nodeBase.toString())
+        val entries = Client.propfindRaw(nodeBase, "1")
+        for (e in entries) {
+            if (e.encodedPath == nodeNorm) continue
+            acc.add(e)
+            if (e.isDirectory) {
+                val name = e.encodedPath.substringAfterLast('/')
+                walkDepth1(nodeBase.resolve(name), acc)
+            }
+        }
+    }
+
+    private fun projectTree(queryPath: String, entries: List<DavPropfindEntry>): List<RemoteTreeEntry> {
+        val qNorm = normalizePath(queryPath)
+        val result = ArrayList<RemoteTreeEntry>(entries.size)
+        for (e in entries) {
+            if (e.encodedPath == qNorm) continue
+            val rel = if (e.encodedPath.startsWith(qNorm)) {
+                e.encodedPath.removePrefix(qNorm).trimStart('/')
+            } else {
+                e.encodedPath.trimStart('/')
+            }
+            if (rel.isEmpty()) continue
+            result.add(RemoteTreeEntry(rel, e.isDirectory, e.size, e.lastModified))
+        }
+        return result
+    }
+
+    private fun normalizePath(p: String): String {
+        val decoded = try { java.net.URLDecoder.decode(p, "UTF-8") } catch (_: Exception) { p }
+        val noTrailing = if (decoded.length > 1) decoded.trimEnd('/') else decoded
+        val withSlash = if (noTrailing.startsWith("/")) noTrailing else "/$noTrailing"
+        return withSlash.ifEmpty { "/" }
+    }
 }
+
+/** 远端整树的一颗节点，路径相对于查询目录。 */
+data class RemoteTreeEntry(
+    val relativePath: String,
+    val isDirectory: Boolean,
+    val size: Long,
+    val lastModified: Long
+)
 
 /**
  * WebDAV file info for displaying in the file manager.

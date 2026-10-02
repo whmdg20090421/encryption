@@ -67,16 +67,16 @@ fun DavResource.putCompat(
         override fun contentLength(): Long = contentLength
         override fun isOneShot() = true
         override fun writeTo(sink: BufferedSink) {
-            sink.flush()  // 刷新缓冲区，确保直接写网络
-            val out = sink.outputStream()
             val buf = ByteArray(UPLOAD_BUFFER_SIZE)
             while (true) {
                 val n = inputStream.read(buf)
                 if (n == -1) break
-                out.write(buf, 0, n)
-                out.flush()  // 每128KB立即发送到网络
+                // 写入 Okio 缓冲，由缓冲区满/请求结束时统一下发网络，避免每块强制 flush
+                // 把小文件写入切碎（进度回调仍按块即时上报，与网络下发解耦）。
+                sink.write(buf, 0, n)
                 onProgress(n.toLong())
             }
+            sink.flush()  // 请求体结束前确保全部下发
         }
     }
     val builder = Request.Builder().put(body).url(location)

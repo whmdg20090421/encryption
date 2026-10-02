@@ -37,7 +37,13 @@ class SyncEngine(
         syncDb: SyncDatabase,
         onProgress: (uploadedBytes: Long, totalBytes: Long) -> Unit,
         onComplete: (success: Boolean, error: String?, countBytes: Boolean) -> Unit,
-        onStatusChange: () -> Unit = {}
+        onStatusChange: () -> Unit = {},
+        /**
+         * 已由调用方（整树对账）确认过云端状态时置 true：跳过逐个文件的
+         * `exists()` + `listChildren` 探测，直接 PUT。批量上传文件夹时使用，
+         * 把 N 次 PROPFIND 降到对账阶段的 1 次（或每目录 1 次兜底）。
+         */
+        preChecked: Boolean = false
     ) = withContext(Dispatchers.IO) {
         val localFile = File(vaultDir, relativePath.trimStart('/'))
 
@@ -57,36 +63,39 @@ class SyncEngine(
         CloudSyncLogger.logSync("SyncEngine", "开始上传: $relativePath -> $remotePath (大小: $fileSize)")
 
         // ① 预检查：检查云端文件是否已存在
-        val cloudExists = try {
-            webdavClient.exists(remotePath)
-        } catch (_: Exception) {
-            false
-        }
-
-        if (cloudExists) {
-            // 云端已有文件 → 比较大小
-            var cloudSize: Long = -1
-            try {
-                val children = webdavClient.listChildren(parentPath)
-                val cloudFile = children?.find { it.name == fileName }
-                if (cloudFile != null) {
-                    cloudSize = cloudFile.size
-                }
-            } catch (_: Exception) {}
-
-            if (cloudSize == fileSize) {
-                // 大小相同 → 比较本地记录与云端记录的明文内容指纹
-                val localEntry = syncDb.getEntry("local_entries", relativePath)
-                val cloudEntry = syncDb.getEntry("cloud_entries", relativePath)
-                if (localEntry?.contentHash != null && localEntry.contentHash == cloudEntry?.contentHash) {
-                    // 明文内容指纹相同 → 同一文件，跳过上传
-                    CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件内容相同）: $relativePath")
-                    syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
-                    onComplete(true, null, true)
-                    return@withContext
-                }
+        //    Batch 场景（preChecked=true）时已由整树对账完成，跳过逐文件 PROPFIND。
+        if (!preChecked) {
+            val cloudExists = try {
+                webdavClient.exists(remotePath)
+            } catch (_: Exception) {
+                false
             }
-            // 大小不同或内容指纹不同 → 继续上传
+
+            if (cloudExists) {
+                // 云端已有文件 → 比较大小
+                var cloudSize: Long = -1
+                try {
+                    val children = webdavClient.listChildren(parentPath)
+                    val cloudFile = children?.find { it.name == fileName }
+                    if (cloudFile != null) {
+                        cloudSize = cloudFile.size
+                    }
+                } catch (_: Exception) {}
+
+                if (cloudSize == fileSize) {
+                    // 大小相同 → 比较本地记录与云端记录的明文内容指纹
+                    val localEntry = syncDb.getEntry("local_entries", relativePath)
+                    val cloudEntry = syncDb.getEntry("cloud_entries", relativePath)
+                    if (localEntry?.contentHash != null && localEntry.contentHash == cloudEntry?.contentHash) {
+                        // 明文内容指纹相同 → 同一文件，跳过上传
+                        CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件内容相同）: $relativePath")
+                        syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
+                        onComplete(true, null, true)
+                        return@withContext
+                    }
+                }
+                // 大小不同或内容指纹不同 → 继续上传
+            }
         }
 
         // ② 锁定 → UPLOADING

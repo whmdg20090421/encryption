@@ -34,19 +34,32 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Route
+import org.xmlpull.v1.XmlPullParser
 import java.util.concurrent.TimeUnit
 
 /**
  * WebDAV client path interface.
- * Replaces MaterialFiles' java8.nio.file.Path dependency.
+ * Replaces MaterialFiles' java.nio.file.Path dependency.
  */
 interface WebDavClientPath {
     val authority: Authority
     val url: HttpUrl
     fun resolve(other: String): WebDavClientPath
 }
+
+/**
+ * PROPFIND 返回的单条资源。encodedPath 为服务端 href 归一化后的绝对路径（已解码）。
+ */
+data class DavPropfindEntry(
+    val encodedPath: String,
+    val isDirectory: Boolean,
+    val size: Long,
+    val lastModified: Long
+)
 
 // See also https://github.com/miquels/webdavfs/blob/master/fuse.go
 object Client {
@@ -74,6 +87,8 @@ object Client {
      * 使每个上传任务拥有自己的传输通道，互不抢占。
      */
     private const val MAX_PARALLEL_REQUESTS = 10
+
+    private val PROPFIND_XML = "application/xml; charset=utf-8".toMediaType()
 
     private val okHttpClient by lazy {
         OkHttpClient.Builder()
@@ -181,6 +196,122 @@ object Client {
                 throw e.toDavException()
             }
         }
+
+    /**
+     * 以指定 Depth 发起一次 PROPFIND 并解析全部条目。
+     *
+     * dav4jvm 的 propfind(depth: Int) 只能表达整数深度，无法发送 `Depth: infinity`，
+     * 因此这里直接发原始 OkHttp 请求，authentication interceptor 仍由 getClient 提供。
+     * 解析用 Android 自带 XmlPullParser，流式读取，避免大目录响应整体入内存。
+     *
+     * @param depth "1" 或 "infinity"
+     * @throws java.io.IOException 请求失败或服务端返回非 207
+     */
+    @Throws(java.io.IOException::class)
+    fun propfindRaw(path: WebDavClientPath, depth: String): List<DavPropfindEntry> {
+        val body = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <D:propfind xmlns:D="DAV:">
+              <D:prop>
+                <D:resourcetype/>
+                <D:getcontentlength/>
+                <D:getlastmodified/>
+              </D:prop>
+            </D:propfind>
+        """.trimIndent().toRequestBody(PROPFIND_XML)
+        val request = Request.Builder()
+            .url(path.url)
+            .method("PROPFIND", body)
+            .header("Depth", depth)
+            .build()
+        val response = getClient(path.authority).newCall(request).execute()
+        response.use { resp ->
+            if (resp.code != HttpURLConnection.HTTP_MULTI_STATUS) {
+                throw IOException("PROPFIND(depth=$depth) HTTP ${resp.code} ${resp.message}")
+            }
+            val input = resp.body?.byteStream() ?: throw IOException("PROPFIND 响应无 body")
+            return parseMultiStatus(input)
+        }
+    }
+
+    private fun parseMultiStatus(input: InputStream): List<DavPropfindEntry> {
+        val parser = android.util.Xml.newPullParser()
+        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+        parser.setInput(input, null)
+        val result = mutableListOf<DavPropfindEntry>()
+        var href: String? = null
+        var isDir = false
+        var size = 0L
+        var lastModified = 0L
+        var inResponse = false
+        var inResourceType = false
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (localName(parser.name)) {
+                    "response" -> {
+                        inResponse = true; href = null; isDir = false; size = 0L; lastModified = 0L
+                    }
+                    "resourcetype" -> inResourceType = true
+                    // resourcetype 内的 collection 子元素即表示该资源是目录
+                    "collection" -> if (inResponse && inResourceType) isDir = true
+                    "href" -> if (inResponse && href == null) href = parser.nextText()
+                    "getcontentlength" -> if (inResponse) size = parser.nextText().trim().toLongOrNull() ?: 0L
+                    "getlastmodified" -> if (inResponse) lastModified = parseHttpDate(parser.nextText().trim())
+                }
+                XmlPullParser.END_TAG -> when (localName(parser.name)) {
+                    "resourcetype" -> inResourceType = false
+                    "response" -> {
+                        if (inResponse && href != null) {
+                            result.add(DavPropfindEntry(decodeHref(href!!), isDir, size, lastModified))
+                        }
+                        inResponse = false
+                    }
+                }
+            }
+            event = parser.next()
+        }
+        return result
+    }
+
+    private fun localName(raw: String): String = raw.substringAfterLast(':')
+
+    /** href 形如 `/webdav/sandbox/sub1/`，去掉尾斜杠并按 URL 解码得到稳定路径。 */
+    private fun decodeHref(href: String): String {
+        val decoded = percentDecode(href)
+        val noTrailing = if (decoded.length > 1) decoded.trimEnd('/') else decoded
+        return noTrailing.ifEmpty { "/" }
+    }
+
+    /**
+     * 仅解码 %XX 的百分号转义，不把 '+' 当作空格（URL 路径中 '+' 是字面量）。
+     * URLDecoder 的语义针对 application/x-www-form-urlencoded，用在这里会误伤含 '+' 的文件名。
+     */
+    private fun percentDecode(s: String): String {
+        if ('%' !in s) return s
+        val out = java.io.ByteArrayOutputStream(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '%' && i + 2 < s.length) {
+                val hex = s.substring(i + 1, i + 3).toIntOrNull(16)
+                if (hex != null) {
+                    out.write(hex)
+                    i += 3
+                    continue
+                }
+            }
+            val bytes = c.toString().toByteArray(Charsets.UTF_8)
+            out.write(bytes, 0, bytes.size)
+            i++
+        }
+        return out.toString("UTF-8")
+    }
+
+    private fun parseHttpDate(s: String): Long = try {
+        java.time.ZonedDateTime.parse(s, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+            .toInstant().toEpochMilli()
+    } catch (_: Exception) { 0L }
 
     @Throws(DavException::class)
     fun findPropertiesOrNull(path: WebDavClientPath, noFollowLinks: Boolean): Response? =
