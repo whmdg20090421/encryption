@@ -132,8 +132,7 @@ private class ShellAccessor(
             return true
         }
 
-        val outcome: ScanOutcome
-        try {
+        val outcome: ScanOutcome = try {
             ShellExecutor.executeWithStdout(permission, command, { line ->
                 val trimmed = line.trim()
                 if (trimmed.isEmpty()) return@executeWithStdout
@@ -152,7 +151,7 @@ private class ShellAccessor(
                     }
                 }
             }, cancelFlag)
-            outcome = when {
+            when {
                 cancelFlag?.get() == true -> ScanOutcome.Cancelled
                 findExitCode == 0 -> ScanOutcome.Success
                 // 完全没有任何条目：路径不存在或无权限访问
@@ -161,10 +160,10 @@ private class ShellAccessor(
                 else -> ScanOutcome.Partial
             }
         } catch (e: ShellException) {
-            outcome = if (cancelFlag?.get() == true) ScanOutcome.Cancelled
+            if (cancelFlag?.get() == true) ScanOutcome.Cancelled
             else ScanOutcome.Failed(e.message ?: "扫描失败")
         } catch (e: Exception) {
-            outcome = if (cancelFlag?.get() == true) ScanOutcome.Cancelled
+            if (cancelFlag?.get() == true) ScanOutcome.Cancelled
             else ScanOutcome.Failed(e.message ?: "扫描异常")
         }
 
