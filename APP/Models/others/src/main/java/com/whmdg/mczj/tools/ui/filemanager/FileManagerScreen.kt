@@ -304,6 +304,12 @@ fun FileManagerScreen(
         }
     }
 
+    // ── 保险箱退出相关弹窗状态（需先于下方定位 effect 声明） ──
+    var showVaultExitDialog by remember { mutableStateOf(false) }
+    var showVaultSyncDialog by remember { mutableStateOf(false) }
+    // 保险箱退出警告确认后要执行的动作（如定位跳转、进入回收站）；null 表示默认「退出文件管理器」
+    var pendingVaultExitAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
     // 来自其他界面的定位请求（如安装包提取完成后点击「定位」）：
     // 以请求对象为 key，首次进入时面板初始化与定位在同一帧，或文件管理器已在栈顶时直接定位。
     // 跳转目标为「当前聚焦面板」：聚焦面板在保险箱内时先弹出密钥销毁警告，确认后才跳转。
@@ -628,11 +634,6 @@ fun FileManagerScreen(
         mutableStateOf(list)
     }
     var showAddQaDialog by remember { mutableStateOf(false) }
-    var showVaultExitDialog by remember { mutableStateOf(false) }
-    var showVaultSyncDialog by remember { mutableStateOf(false) }
-    // 保险箱退出警告确认后要执行的动作（如定位跳转、进入回收站）；null 表示默认「退出文件管理器」
-    var pendingVaultExitAction by remember { mutableStateOf<(() -> Unit)?>(null) }
-
     // ── WebDAV 快捷访问 ──
     var showQaTypeSelector by remember { mutableStateOf(false) }
     var showWebDavEditDialog by remember { mutableStateOf(false) }
