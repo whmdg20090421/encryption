@@ -149,6 +149,14 @@ object ShellDaemon {
         val exitCode = try {
             ShizukuAuthorizer.executeStreaming(command, useStderr, cancelFlag, onOutputLine)
         } catch (e: ShizukuUnavailableException) {
+            // 用户取消不是「Shizuku 不可用」，绝不能回退重跑命令
+            if (cancelFlag?.get() == true) {
+                throw ShellException(
+                    message = "命令已取消",
+                    command = command,
+                    permission = permission
+                )
+            }
             Log.w(TAG, "Shizuku 不可用（${e.message}），回退到应用自身权限流式执行")
             reportFallback(e.message ?: "Shizuku 不可用", command)
             executeStreamingApplicant(command, permission, useStderr, onOutputLine, cancelFlag)
@@ -243,6 +251,134 @@ object ShellDaemon {
         }
         val shell = getOrCreateShell(permission)
         executeStreamingInShell(shell, command, permission, onStdoutLine, cancelFlag)
+    }
+
+    /**
+     * 扫描专用流式执行：用于文件夹大小统计等长耗时 `find` 命令，实时回调 stdout 每行。
+     *
+     * 与 [executeWithStdout] 的关键区别：**不复用日常持久 shell**。原因：
+     * 长耗时命令被取消时，若复用持久 shell，命令进程仍在管道里继续输出残留数据，
+     * 污染后续命令的 stdout，导致解析错乱（目录显示空白、返回无反应）。
+     *
+     * 三通道均使用「独立一次性进程」，取消时 [Process.destroyForcibly] 真正杀掉进程：
+     *   - ROOT：`su -c <command>`
+     *   - APPLICANT：`sh -c <command>`
+     *   - ADB：Shizuku `newProcess`（由 [ShizukuAuthorizer] 负责取消时 destroy）
+     *
+     * @throws ShellException 启动失败、非零退出或用户取消
+     */
+    fun executeScanStreaming(
+        permission: Permission,
+        command: String,
+        onStdoutLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean? = null
+    ) {
+        if (permission == Permission.ADB) {
+            try {
+                val exitCode = ShizukuAuthorizer.executeStreaming(command, useStderr = false, cancelFlag, onStdoutLine)
+                if (exitCode != 0) {
+                    throw ShellException(
+                        message = "扫描命令执行失败",
+                        command = command,
+                        permission = permission,
+                        exitCode = exitCode
+                    )
+                }
+                return
+            } catch (e: ShizukuUnavailableException) {
+                // 取消不是「Shizuku 不可用」，绝不回退重跑
+                if (cancelFlag?.get() == true) {
+                    throw ShellException("命令已取消", command, permission)
+                }
+                Log.w(TAG, "Shizuku 不可用（${e.message}），扫描回退到应用自身权限独立进程")
+                reportFallback(e.message ?: "Shizuku 不可用", command)
+                // 扫描回退也必须使用独立进程，禁止污染日常持久 shell
+                executeIsolatedScanProcess(arrayOf("sh", "-c", command), command, permission, onStdoutLine, cancelFlag)
+                return
+            }
+        }
+        val cmdArray = when (permission) {
+            Permission.ROOT -> arrayOf("su", "-c", command)
+            else -> arrayOf("sh", "-c", command)
+        }
+        executeIsolatedScanProcess(cmdArray, command, permission, onStdoutLine, cancelFlag)
+    }
+
+    /**
+     * 以独立一次性进程执行扫描命令，逐行回调 stdout，支持取消时杀进程。
+     * stderr 由守护线程丢弃，避免管道写满阻塞。
+     */
+    private fun executeIsolatedScanProcess(
+        cmdArray: Array<String>,
+        command: String,
+        permission: Permission,
+        onStdoutLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean?
+    ) {
+        val process = try {
+            ProcessBuilder(*cmdArray).redirectErrorStream(false).start()
+        } catch (e: Exception) {
+            throw ShellException(
+                message = "扫描命令启动异常",
+                command = command,
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+
+        val outThread = Thread {
+            try {
+                process.inputStream.bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        if (cancelFlag?.get() == true) break
+                        onStdoutLine(line!!)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.apply { isDaemon = true; start() }
+
+        val errThread = Thread {
+            try {
+                process.errorStream.bufferedReader().use { reader ->
+                    while (reader.readLine() != null) { /* 丢弃 */ }
+                }
+            } catch (_: Exception) {}
+        }.apply { isDaemon = true; start() }
+
+        try {
+            while (process.isAlive) {
+                if (cancelFlag?.get() == true) {
+                    process.destroyForcibly()
+                    break
+                }
+                Thread.sleep(50)
+            }
+        } finally {
+            if (cancelFlag?.get() == true) {
+                try { process.destroyForcibly() } catch (_: Exception) {}
+            }
+        }
+
+        outThread.join(2000)
+        errThread.join(1000)
+
+        if (cancelFlag?.get() == true) {
+            throw ShellException(
+                message = "命令已取消",
+                command = command,
+                permission = permission
+            )
+        }
+        val exitCode = process.exitValue()
+        if (exitCode != 0) {
+            throw ShellException(
+                message = "扫描命令执行失败",
+                command = command,
+                permission = permission,
+                exitCode = exitCode
+            )
+        }
     }
 
     /**

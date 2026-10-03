@@ -133,13 +133,13 @@ private class ShellAccessor(
         }
 
         val outcome: ScanOutcome = try {
-            ShellExecutor.executeWithStdout(permission, command, { line ->
+            ShellExecutor.executeScanStdout(permission, command, { line ->
                 val trimmed = line.trim()
-                if (trimmed.isEmpty()) return@executeWithStdout
+                if (trimmed.isEmpty()) return@executeScanStdout
                 val bytes = try {
                     Base64.getDecoder().decode(trimmed)
                 } catch (_: IllegalArgumentException) {
-                    return@executeWithStdout
+                    return@executeScanStdout
                 }
                 accumulator.append(bytes)
                 while (true) {

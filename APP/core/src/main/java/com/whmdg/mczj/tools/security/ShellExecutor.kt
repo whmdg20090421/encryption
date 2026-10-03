@@ -274,6 +274,47 @@ object ShellExecutor {
         }
     }
 
+    // ── 扫描专用 stdout 流式执行 ─────────────────────────────────────
+
+    /**
+     * 扫描专用流式执行：用于文件夹大小统计等长耗时 `find` 命令。
+     *
+     * 与 [executeWithStdout] 不同，本方法**不复用日常持久 shell**，而是走
+     * 独立一次性进程，取消时可真正杀掉命令进程，避免残留输出污染后续命令。
+     */
+    fun executeScanStdout(
+        permission: Permission,
+        command: String,
+        onStdoutLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean? = null
+    ) {
+        if (command.isBlank()) {
+            throw ShellException(
+                message = "Shell 命令不能为空",
+                command = command,
+                permission = permission
+            )
+        }
+
+        DiagnosticLog.log("ShellExecutor", "scan执行: permission=$permission cmd=${command.take(200)}")
+
+        val resolved = resolvePermission(permission)
+        try {
+            ShellDaemon.executeScanStreaming(resolved, command, onStdoutLine, cancelFlag)
+        } catch (e: ShellException) {
+            Log.e("ShellExecutor", "scan执行失败: ${e.message}", e)
+            throw e
+        } catch (e: Exception) {
+            Log.e("ShellExecutor", "scan执行异常: ${e.message}", e)
+            throw ShellException(
+                message = "scan执行异常: ${e.message}",
+                command = command,
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+    }
+
     // ── 权限解析 ──────────────────────────────────────────────────────
 
     private fun resolvePermission(permission: Permission): Permission {

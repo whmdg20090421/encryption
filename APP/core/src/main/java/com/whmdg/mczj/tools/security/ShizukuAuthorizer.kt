@@ -218,14 +218,25 @@ object ShizukuAuthorizer {
 
         return try {
             val pfd = if (useStderr) process.errorStream else process.inputStream
+            var cancelled = false
             pfdAutoCloseInputStream(pfd).bufferedReader().use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    if (cancelFlag?.get() == true) break
+                    if (cancelFlag?.get() == true) {
+                        // 立即杀进程，避免命令继续输出残留数据
+                        try { process.destroy() } catch (_: Exception) {}
+                        cancelled = true
+                        break
+                    }
                     onOutputLine(line!!)
                 }
             }
+            if (cancelled) {
+                throw ShizukuUnavailableException("命令已取消")
+            }
             process.waitFor()
+        } catch (e: ShizukuUnavailableException) {
+            throw e
         } catch (e: Exception) {
             throw ShizukuUnavailableException("流式执行失败: ${e.message}")
         } finally {

@@ -163,7 +163,8 @@ object FolderSizeStore {
         // 避免提交的扫描结果被尚未落库的增量写入覆盖（或反之）。
         synchronized(lock) { flushLocked() }
         val db = dbInternal()
-        val existing = db.getDescendants(staging.rootPath)
+        val rootKey = normalize(staging.rootPath)
+        val existing = db.getDescendants(rootKey)
         val scanned = if (deleteMissing) staging.scannedPaths() else emptySet()
         val removed = if (scanned.isNotEmpty()) existing.keys.filter { it !in scanned } else emptyList()
 
@@ -174,9 +175,47 @@ object FolderSizeStore {
                 changed[path] = info
             }
         }
-        if (changed.isEmpty() && removed.isEmpty()) return
-        db.applyDiff(changed, removed)
+
+        // 父目录冒泡：本次统计根的增量 = 新值 - 旧值，逐级累加到所有父系目录。
+        // 谁被统计谁就修正父系，不判断祖先是否可信——若子项未变化则增量为 0，天然无影响。
+        val newRootSize = writes[rootKey]?.size
+        val oldRootSize = existing[rootKey]?.size ?: 0L
+        val delta = if (newRootSize != null) newRootSize - oldRootSize else 0L
+        val ancestorUpdates = LinkedHashMap<String, FolderSizeInfo>()
+        if (delta != 0L) {
+            for (ancestor in ancestorsOf(rootKey)) {
+                val oldInfo = db.get(ancestor)
+                ancestorUpdates[ancestor] = FolderSizeInfo(
+                    size = (oldInfo?.size ?: 0L) + delta,
+                    lastModified = oldInfo?.lastModified ?: 0L
+                )
+            }
+        }
+
+        if (changed.isEmpty() && removed.isEmpty() && ancestorUpdates.isEmpty()) return
+        db.applyDiffWithAncestors(changed, removed, ancestorUpdates)
         bumpVersion()
+    }
+
+    /**
+     * 计算路径的父系路径链（自下而上，最后一项为文件系统根 `/`）。
+     * 例如 `/a/b/c` → [`/a/b`, `/a`, `/`]；根自身返回空列表。
+     */
+    private fun ancestorsOf(path: String): List<String> {
+        val key = normalize(path)
+        if (key.isEmpty() || key == "/") return emptyList()
+        val result = ArrayList<String>()
+        var cur = key
+        while (true) {
+            val idx = cur.lastIndexOf('/')
+            if (idx <= 0) {
+                result.add("/")
+                break
+            }
+            cur = cur.substring(0, idx)
+            result.add(cur)
+        }
+        return result
     }
 
     /** 将缓冲区合并为一笔事务落库。可由生命周期回收点显式调用。 */

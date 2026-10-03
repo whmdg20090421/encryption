@@ -173,11 +173,20 @@ class FolderSizeDb private constructor(
     }
 
     /**
-     * 子树差量写入：在**一笔事务**内先按精确路径删除 [removedPaths]，
-     * 再插入/更新 [updates]。用于刷新时只写变化项、删消失项，避免全量重写。
+     * 子树差量写入并同步更新祖先：在**一笔事务**内
+     *   1. 按精确路径删除 [removedPaths]；
+     *   2. 插入/更新子树 [updates]；
+     *   3. 用 [ancestorUpdates] 覆盖写入祖先记录（由调用方算好新值）。
+     *
+     * 用于文件夹大小统计：统计某目录后自身子树落库，并把它相对旧值的增量
+     * 逐级累加到所有父系目录，使父目录无需单独统计也能显示已统计子项之和。
      */
-    fun applyDiff(updates: Map<String, FolderSizeInfo>, removedPaths: Collection<String>) {
-        if (updates.isEmpty() && removedPaths.isEmpty()) return
+    fun applyDiffWithAncestors(
+        updates: Map<String, FolderSizeInfo>,
+        removedPaths: Collection<String>,
+        ancestorUpdates: Map<String, FolderSizeInfo>
+    ) {
+        if (updates.isEmpty() && removedPaths.isEmpty() && ancestorUpdates.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -185,6 +194,11 @@ class FolderSizeDb private constructor(
                 db.delete(TABLE, "$COL_PATH = ?", arrayOf(normalize(path)))
             }
             for ((path, info) in updates) {
+                db.insertWithOnConflict(
+                    TABLE, null, contentValues(normalize(path), info), SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            for ((path, info) in ancestorUpdates) {
                 db.insertWithOnConflict(
                     TABLE, null, contentValues(normalize(path), info), SQLiteDatabase.CONFLICT_REPLACE
                 )
