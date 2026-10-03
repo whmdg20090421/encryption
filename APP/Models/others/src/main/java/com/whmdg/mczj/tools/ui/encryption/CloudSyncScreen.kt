@@ -746,9 +746,17 @@ fun CloudSyncScreen(
                         }
                     }
                 }
-                val currentConcurrency = remember {
-                    AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
-                        .getInt("max_concurrency", 3)
+                var currentConcurrency by remember {
+                    mutableStateOf(
+                        AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
+                            .getInt("max_concurrency", 3)
+                    )
+                }
+                var currentDownloadConcurrency by remember {
+                    mutableStateOf(
+                        AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
+                            .getInt("max_download_concurrency", 1)
+                    )
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -770,10 +778,16 @@ fun CloudSyncScreen(
                     // 并发数滑动条对话框
                     if (showConcurrencyDialog) {
                         ConcurrencySliderDialog(
-                            currentValue = currentConcurrency,
-                            onConfirm = { value ->
+                            currentUploadValue = currentConcurrency,
+                            currentDownloadValue = currentDownloadConcurrency,
+                            onConfirm = { uploadValue, downloadValue ->
                                 AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
-                                    .edit().putInt("max_concurrency", value).apply()
+                                    .edit()
+                                    .putInt("max_concurrency", uploadValue)
+                                    .putInt("max_download_concurrency", downloadValue)
+                                    .apply()
+                                currentConcurrency = uploadValue
+                                currentDownloadConcurrency = downloadValue
                                 showConcurrencyDialog = false
                             },
                             onDismiss = { showConcurrencyDialog = false }
@@ -2063,8 +2077,9 @@ private fun CloudInfoRow(label: String, value: String, isDarkMode: Boolean) {
 
 @Composable
 private fun ConcurrencySliderDialog(
-    currentValue: Int,
-    onConfirm: (Int) -> Unit,
+    currentUploadValue: Int,
+    currentDownloadValue: Int,
+    onConfirm: (Int, Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     val isDarkMode = LocalIsDarkMode.current
@@ -2072,7 +2087,8 @@ private fun ConcurrencySliderDialog(
     val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
     val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
 
-    var sliderValue by remember { mutableFloatStateOf(currentValue.toFloat()) }
+    var uploadValue by remember { mutableFloatStateOf(currentUploadValue.toFloat()) }
+    var downloadValue by remember { mutableFloatStateOf(currentDownloadValue.toFloat()) }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -2093,14 +2109,38 @@ private fun ConcurrencySliderDialog(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "同时上传文件数量：${sliderValue.toInt()}",
+                    text = "上传并发数：${uploadValue.toInt()}",
                     fontSize = 14.sp,
                     color = subTextColor
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Slider(
-                    value = sliderValue,
-                    onValueChange = { sliderValue = it },
+                    value = uploadValue,
+                    onValueChange = { uploadValue = it },
+                    valueRange = 1f..10f,
+                    steps = 8,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF3B82F6),
+                        activeTrackColor = Color(0xFF3B82F6)
+                    )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("1", fontSize = 11.sp, color = subTextColor)
+                    Text("10", fontSize = 11.sp, color = subTextColor)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "下载并发数：${downloadValue.toInt()}",
+                    fontSize = 14.sp,
+                    color = subTextColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Slider(
+                    value = downloadValue,
+                    onValueChange = { downloadValue = it },
                     valueRange = 1f..10f,
                     steps = 8,
                     colors = SliderDefaults.colors(
@@ -2125,7 +2165,7 @@ private fun ConcurrencySliderDialog(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
-                        onClick = { onConfirm(sliderValue.toInt()) },
+                        onClick = { onConfirm(uploadValue.toInt(), downloadValue.toInt()) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
                         shape = RoundedCornerShape(8.dp)
                     ) {

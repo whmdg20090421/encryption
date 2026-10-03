@@ -56,6 +56,9 @@ class CloudPaneController(
 ) {
     val state = CloudPanelState()
 
+    /** 保护 [state] 中 syncTask 的读-改-写（多通道并发下载进度回调使用）。 */
+    private val stateLock = Any()
+
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
     private var downloadJob: Job? = null
@@ -409,6 +412,12 @@ class CloudPaneController(
             android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
+        // 并发保护：下载进行中不允许启动上传，避免两个方向同时读写本地/云端
+        if (downloadJob?.isActive == true) {
+            DiagnosticLog.log("CloudPane", "上传被拒绝（有下载任务进行中） path='$relativePath'")
+            android.widget.Toast.makeText(context, "当前有任务正在进行，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
 
         val localFile = File(vaultDir, relativePath.trimStart('/'))
         if (!localFile.exists()) {
@@ -596,6 +605,11 @@ class CloudPaneController(
 
     /** 上传文件夹：对比本地文件与 DB → 用户决策 → 并发上传 */
     private fun uploadFolder(folderRelativePath: String) {
+        // 并发保护：下载进行中不允许启动上传
+        if (downloadJob?.isActive == true) {
+            android.widget.Toast.makeText(context, "当前有任务正在进行，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         // 冗余措施：先终止旧上传协程（如果还在运行）
         val oldJob = syncJob
         syncJob = null
@@ -1124,7 +1138,7 @@ class CloudPaneController(
                                     val percent = (transferred.toDouble() / uploadTotalBytes).toFloat()
                                     val avgSpeed = if (elapsedMs > 0) transferred * 1000 / elapsedMs else 0L
                                     CloudSyncForegroundService.update(percent, transferred, uploadTotalBytes, elapsedMs, avgSpeed)
-                                    SyncOverlayBubble.update(formatSyncPercent(state.syncTask))
+                                    SyncOverlayBubble.update(formatSyncPercent(state.syncTask), state.syncTask.mode)
                                 }
                                 // 只更新文件自身进度条（文件夹聚合在 Complete 时更新）
                                 updateFileProgressOnly(event.path)
@@ -1459,10 +1473,18 @@ class CloudPaneController(
             android.widget.Toast.makeText(context, "正在校验本地文件，请稍候", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-        // 并发保护：上传/下载进行中不允许再次触发
-        val busy = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
-        if (busy) {
+        // 并发保护：上传/下载进行中不允许再次触发（上传协程未结束，或 DB 中仍有 UPLOADING 条目）
+        val uploadActive = syncJob?.isActive == true ||
+            syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
+        if (uploadActive) {
             DiagnosticLog.log("CloudPane", "下载被拒绝（有上传任务进行中） path='$relativePath'")
+            android.widget.Toast.makeText(context, "当前有任务正在进行，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // 并发保护：已有下载任务进行中不重复启动
+        if (downloadJob?.isActive == true) {
+            DiagnosticLog.log("CloudPane", "下载被拒绝（已有下载任务进行中） path='$relativePath'")
             android.widget.Toast.makeText(context, "当前有任务正在进行，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -1489,6 +1511,11 @@ class CloudPaneController(
 
             val totalBytes = cloudFiles.sumOf { it.size }
 
+            // 下载并发数：从设置读取（1~10，默认 1 = 串行）
+            val maxDownloadConcurrency = AppDataPaths.prefs(context, AppDataPaths.PREFS_CLOUD_SYNC_SETTINGS)
+                .getInt("max_download_concurrency", 1)
+                .coerceIn(1, 10)
+
             // 初始化下载任务状态（复用上传进度 UI，mode=下载）
             state.onCancelUpload = ::cancelDownload
             state.syncTask = SyncTaskState(
@@ -1496,7 +1523,7 @@ class CloudPaneController(
                 mode = SyncMode.CLOUD_TO_LOCAL,
                 totalFiles = cloudFiles.size,
                 totalBytes = totalBytes,
-                concurrency = 1
+                concurrency = maxDownloadConcurrency
             )
             openProgressDialog()
 
@@ -1506,152 +1533,68 @@ class CloudPaneController(
             CloudSyncForegroundService.start(context, "正在下载 ${cloudFiles.size} 个文件")
             CloudSyncForegroundService.update(0f, 0L, downloadTotalBytes, 0L, 0L)
 
-            var completedFiles = 0
-            var skippedFiles = 0
-            var transferredBytes = 0L
+            val completedFiles = java.util.concurrent.atomic.AtomicInteger(0)
+            val skippedFiles = java.util.concurrent.atomic.AtomicInteger(0)
+            val transferredBytes = java.util.concurrent.atomic.AtomicLong(0)
+
+            // 冲突/错误弹窗串行化：同一时刻仅一个弹窗，其余通道阻塞等待（"弹窗即暂停全部通道"）。
+            val downloadDialogMutex = kotlinx.coroutines.sync.Mutex()
+            // syncTask 的读-改-写保护（多通道并发更新进度）。
+            val stateMutex = kotlinx.coroutines.sync.Mutex()
+
+            /** 在锁内对 syncTask 做读-改-写，避免并发丢失更新。 */
+            suspend fun updateSyncTask(transform: (SyncTaskState) -> SyncTaskState) {
+                stateMutex.withLock {
+                    synchronized(stateLock) { state.syncTask = transform(state.syncTask) }
+                }
+            }
 
             var completedNormally = false
             try {
-                for (cloudEntry in cloudFiles) {
-                    currentCoroutineContext().ensureActive()
-                    val relPath = cloudEntry.path
-                    val fileName = cloudEntry.originalName?.takeIf { it.isNotEmpty() }
-                        ?: relPath.substringAfterLast('/')
+                var queueIndex = 0
+                var activeWorkers = 0
+                val downloadJobs = mutableListOf<Job>()
 
-                    // 冲突检测：本地存在同名且未同步（PENDING）→ 红蓝双条
-                    val localEntry = withContext(Dispatchers.IO) {
-                        syncDb.getEntry("local_entries", relPath)
+                while (queueIndex < cloudFiles.size || activeWorkers > 0) {
+                    while (activeWorkers >= maxDownloadConcurrency && queueIndex < cloudFiles.size) {
+                        delay(100)
                     }
-                    val hasConflict = localEntry != null && localEntry.status != SyncStatus.COMPLETED
-
-                    if (hasConflict && localEntry != null) {
-                        // 冲突原因：明文 SHA-256 不同
-                        val reasons = listOf("SHA-256 不同")
-                        val overwrite = suspendCancellableCoroutine<Boolean> { cont ->
-                            state.downloadConflictDialog = DownloadConflictState(
-                                path = relPath,
-                                localSize = localEntry.size,
-                                localModified = localEntry.lastModified,
-                                cloudSize = cloudEntry.size,
-                                cloudModified = cloudEntry.lastModified,
-                                reasons = reasons,
-                                onConfirm = { choice -> cont.resume(choice) {} }
-                            )
-                        }
-                        state.downloadConflictDialog = null
-                        if (!overwrite) {
-                            // 跳过本次同步，继续下一个
-                            skippedFiles++
-                            transferredBytes += cloudEntry.size
-                            state.syncTask = state.syncTask.copy(
-                                completedFiles = completedFiles,
-                                transferredBytes = transferredBytes
-                            )
-                            continue
-                        }
-                    }
-
-                    // 下载单个文件（覆盖或新建，均直接写入磁盘）
-                    val fileProgress = SyncFileProgress(
-                        relativePath = relPath,
-                        totalBytes = cloudEntry.size,
-                        uploadedBytes = 0,
-                        status = UploadStatus.PENDING
-                    )
-                    state.syncTask = state.syncTask.copy(
-                        currentFileName = fileName,
-                        fileProgress = state.syncTask.fileProgress + (relPath to fileProgress)
-                    )
-
-                    val remotePath = "$remoteBasePath/${relPath.trimStart('/')}"
-                    val localFile = File(vaultDir, relPath.trimStart('/'))
-                    val baseTransferred = transferredBytes
-
-                    val success = withContext(Dispatchers.IO) {
-                        try {
-                            localFile.parentFile?.mkdirs()
-                            webdavClient.downloadFile(remotePath, localFile) { done ->
-                                val live = fileProgress.copy(uploadedBytes = done, status = UploadStatus.UPLOADING)
-                                state.syncTask = state.syncTask.copy(
-                                    transferredBytes = baseTransferred + done,
-                                    fileProgress = state.syncTask.fileProgress + (relPath to live)
+                    if (queueIndex < cloudFiles.size && activeWorkers < maxDownloadConcurrency) {
+                        val cloudEntry = cloudFiles[queueIndex++]
+                        activeWorkers++
+                        val job = launch {
+                            try {
+                                downloadSingleFile(
+                                    cloudEntry = cloudEntry,
+                                    syncDb = syncDb,
+                                    remoteBasePath = remoteBasePath,
+                                    vaultDir = vaultDir,
+                                    downloadDialogMutex = downloadDialogMutex,
+                                    updateSyncTask = ::updateSyncTask,
+                                    completedFiles = completedFiles,
+                                    skippedFiles = skippedFiles,
+                                    transferredBytes = transferredBytes,
+                                    downloadTotalBytes = downloadTotalBytes,
+                                    downloadStartMs = downloadStartMs
                                 )
+                            } finally {
+                                activeWorkers--
                             }
-                            true
-                        } catch (e: Exception) {
-                            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSyncError(
-                                "CloudPane", "下载失败: $relPath", e
-                            )
-                            false
                         }
+                        downloadJobs.add(job)
                     }
-
-                    if (success) {
-                        // 更新 local_entries 为与云端一致 → 绿色
-                        withContext(Dispatchers.IO) {
-                            val actualSize = localFile.length()
-                            val actualModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
-                            syncDb.upsertEntry("local_entries", SyncEntryRow(
-                                path = relPath,
-                                size = actualSize,
-                                uploadedSize = actualSize,
-                                lastModified = actualModified,
-                                contentHash = cloudEntry.contentHash,
-                                cloudHash = cloudEntry.cloudHash,
-                                status = SyncStatus.COMPLETED,
-                                lastSyncTime = Instant.now().toString(),
-                                failReason = null,
-                                originalName = cloudEntry.originalName
-                            ))
-                        }
-                        completedFiles++
-                        transferredBytes += cloudEntry.size
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            syncDb.updateStatus("local_entries", relPath, SyncStatus.PAUSED, "下载失败")
-                        }
-                        // 暂停整个串行下载：弹错误框并挂起当前协程，等用户关闭弹窗后再继续处理后续文件。
-                        // 避免在用户尚未查看报错时继续下载，造成"错误一闪而过"或漏看。
-                        suspendCancellableCoroutine<Unit> { cont ->
-                            state.errorDialogInfo = ErrorDialogInfo(
-                                title = "下载失败",
-                                message = "下载文件失败：$fileName",
-                                detail = buildString {
-                                    appendLine("操作: 下载单个文件")
-                                    appendLine("文件: $fileName")
-                                    appendLine("路径: $relPath")
-                                    appendLine("原因: 云端文件下载或校验未通过")
-                                    appendLine("时间: ${java.time.LocalDateTime.now()}")
-                                }
-                            )
-                            state.onErrorDialogDismiss = {
-                                state.onErrorDialogDismiss = null
-                                if (cont.isActive) cont.resume(Unit)
-                            }
-                            cont.invokeOnCancellation { state.onErrorDialogDismiss = null }
-                        }
-                    }
-
-                    // 清理本文件的内存进度
-                    state.syncTask = state.syncTask.copy(
-                        completedFiles = completedFiles,
-                        transferredBytes = transferredBytes,
-                        fileProgress = state.syncTask.fileProgress - relPath
-                    )
-                    if (downloadTotalBytes > 0) {
-                        val elapsedMs = System.currentTimeMillis() - downloadStartMs
-                        val percent = (transferredBytes.toDouble() / downloadTotalBytes).toFloat()
-                        val avgSpeed = if (elapsedMs > 0) transferredBytes * 1000 / elapsedMs else 0L
-                        CloudSyncForegroundService.update(percent, transferredBytes, downloadTotalBytes, elapsedMs, avgSpeed)
-                        SyncOverlayBubble.update(formatSyncPercent(state.syncTask))
-                    }
+                    downloadJobs.removeAll { !it.isActive }
+                    // 队列已排空但仍有通道在跑：短暂让出，避免忙等空转
+                    if (queueIndex >= cloudFiles.size && activeWorkers > 0) delay(50)
                 }
+
+                downloadJobs.forEach { it.join() }
 
                 // 完成后刷新列表，冲突消除、条目变绿
                 withContext(Dispatchers.Main) { navigateTo(state.currentPath) }
                 val msg = buildString {
-                    append("下载完成: 成功 ${completedFiles}/${cloudFiles.size} 个")
-                    if (skippedFiles > 0) append("，跳过 $skippedFiles 个")
+                    append("下载完成: 成功 ${completedFiles.get()}/${cloudFiles.size} 个")
+                    if (skippedFiles.get() > 0) append("，跳过 ${skippedFiles.get()} 个")
                 }
                 android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
 
@@ -1685,6 +1628,171 @@ class CloudPaneController(
                 state.overlayBubbleActive = false
                 CloudSyncForegroundService.finish(context, success = completedNormally)
             }
+        }
+    }
+
+    /**
+     * 下载单个云端文件（并发通道消费单元）。冲突/错误弹窗通过 [downloadDialogMutex] 串行化，
+     * 同一时刻仅一个弹窗，其余通道阻塞等待。计数器为原子量，进度读-改-写经 [updateSyncTask] 加锁。
+     */
+    private suspend fun downloadSingleFile(
+        cloudEntry: SyncEntryRow,
+        syncDb: SyncDatabase,
+        remoteBasePath: String,
+        vaultDir: String,
+        downloadDialogMutex: kotlinx.coroutines.sync.Mutex,
+        updateSyncTask: suspend ((SyncTaskState) -> SyncTaskState) -> Unit,
+        completedFiles: java.util.concurrent.atomic.AtomicInteger,
+        skippedFiles: java.util.concurrent.atomic.AtomicInteger,
+        transferredBytes: java.util.concurrent.atomic.AtomicLong,
+        downloadTotalBytes: Long,
+        downloadStartMs: Long
+    ) {
+        currentCoroutineContext().ensureActive()
+        val relPath = cloudEntry.path
+        val fileName = cloudEntry.originalName?.takeIf { it.isNotEmpty() }
+            ?: relPath.substringAfterLast('/')
+
+        // 冲突检测：本地存在同名且未同步（PENDING）→ 红蓝双条
+        val localEntry = withContext(Dispatchers.IO) {
+            syncDb.getEntry("local_entries", relPath)
+        }
+        val hasConflict = localEntry != null && localEntry.status != SyncStatus.COMPLETED
+
+        if (hasConflict && localEntry != null) {
+            // 冲突原因：明文 SHA-256 不同
+            val reasons = listOf("SHA-256 不同")
+            val overwrite = downloadDialogMutex.withLock {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    state.downloadConflictDialog = DownloadConflictState(
+                        path = relPath,
+                        localSize = localEntry.size,
+                        localModified = localEntry.lastModified,
+                        cloudSize = cloudEntry.size,
+                        cloudModified = cloudEntry.lastModified,
+                        reasons = reasons,
+                        onConfirm = { choice -> cont.resume(choice) {} }
+                    )
+                    cont.invokeOnCancellation { state.downloadConflictDialog = null }
+                }
+            }
+            state.downloadConflictDialog = null
+            if (!overwrite) {
+                // 跳过本次同步，继续下一个
+                skippedFiles.incrementAndGet()
+                transferredBytes.addAndGet(cloudEntry.size)
+                updateSyncTask { task ->
+                    task.copy(
+                        completedFiles = completedFiles.get(),
+                        transferredBytes = transferredBytes.get()
+                    )
+                }
+                return
+            }
+        }
+
+        // 下载单个文件（覆盖或新建，均直接写入磁盘）
+        val fileProgress = SyncFileProgress(
+            relativePath = relPath,
+            totalBytes = cloudEntry.size,
+            uploadedBytes = 0,
+            status = UploadStatus.PENDING
+        )
+        updateSyncTask { task ->
+            task.copy(
+                currentFileName = fileName,
+                fileProgress = task.fileProgress + (relPath to fileProgress)
+            )
+        }
+
+        val remotePath = "$remoteBasePath/${relPath.trimStart('/')}"
+        val localFile = File(vaultDir, relPath.trimStart('/'))
+        // 本文件在总进度中的基准（该文件下载中途成功累计的最终值在其他文件完成后统一加总）
+        val baseTransferred = transferredBytes.get()
+
+        val success = withContext(Dispatchers.IO) {
+            try {
+                localFile.parentFile?.mkdirs()
+                webdavClient.downloadFile(remotePath, localFile) { done ->
+                    val live = fileProgress.copy(uploadedBytes = done, status = UploadStatus.UPLOADING)
+                    synchronized(stateLock) {
+                        state.syncTask = state.syncTask.copy(
+                            transferredBytes = baseTransferred + done,
+                            fileProgress = state.syncTask.fileProgress + (relPath to live)
+                        )
+                    }
+                }
+                true
+            } catch (e: Exception) {
+                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSyncError(
+                    "CloudPane", "下载失败: $relPath", e
+                )
+                false
+            }
+        }
+
+        if (success) {
+            // 更新 local_entries 为与云端一致 → 绿色
+            withContext(Dispatchers.IO) {
+                val actualSize = localFile.length()
+                val actualModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
+                syncDb.upsertEntry("local_entries", SyncEntryRow(
+                    path = relPath,
+                    size = actualSize,
+                    uploadedSize = actualSize,
+                    lastModified = actualModified,
+                    contentHash = cloudEntry.contentHash,
+                    cloudHash = cloudEntry.cloudHash,
+                    status = SyncStatus.COMPLETED,
+                    lastSyncTime = Instant.now().toString(),
+                    failReason = null,
+                    originalName = cloudEntry.originalName
+                ))
+            }
+            completedFiles.incrementAndGet()
+            transferredBytes.addAndGet(cloudEntry.size)
+        } else {
+            withContext(Dispatchers.IO) {
+                syncDb.updateStatus("local_entries", relPath, SyncStatus.PAUSED, "下载失败")
+            }
+            // 错误弹窗：经 Mutex 串行化，同一时刻仅一个；本通道挂起等待用户关闭后再继续。
+            downloadDialogMutex.withLock {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    state.errorDialogInfo = ErrorDialogInfo(
+                        title = "下载失败",
+                        message = "下载文件失败：$fileName",
+                        detail = buildString {
+                            appendLine("操作: 下载单个文件")
+                            appendLine("文件: $fileName")
+                            appendLine("路径: $relPath")
+                            appendLine("原因: 云端文件下载或校验未通过")
+                            appendLine("时间: ${java.time.LocalDateTime.now()}")
+                        }
+                    )
+                    state.onErrorDialogDismiss = {
+                        state.onErrorDialogDismiss = null
+                        if (cont.isActive) cont.resume(Unit)
+                    }
+                    cont.invokeOnCancellation { state.onErrorDialogDismiss = null }
+                }
+            }
+        }
+
+        // 清理本文件的内存进度
+        updateSyncTask { task ->
+            task.copy(
+                completedFiles = completedFiles.get(),
+                transferredBytes = transferredBytes.get(),
+                fileProgress = task.fileProgress - relPath
+            )
+        }
+        if (downloadTotalBytes > 0) {
+            val elapsedMs = System.currentTimeMillis() - downloadStartMs
+            val transferred = transferredBytes.get()
+            val percent = (transferred.toDouble() / downloadTotalBytes).toFloat()
+            val avgSpeed = if (elapsedMs > 0) transferred * 1000 / elapsedMs else 0L
+            CloudSyncForegroundService.update(percent, transferred, downloadTotalBytes, elapsedMs, avgSpeed)
+            SyncOverlayBubble.update(formatSyncPercent(state.syncTask), state.syncTask.mode)
         }
     }
 
@@ -1922,8 +2030,8 @@ class CloudPaneController(
     fun hideProgressDialog() {
         state.syncDialogVisible = false
         if (SyncOverlayBubble.canShow(context)) {
-            SyncOverlayBubble.show(context) { bringAppToFrontAndExpand() }
-            SyncOverlayBubble.update(formatSyncPercent(state.syncTask))
+            SyncOverlayBubble.show(context, state.syncTask.mode) { bringAppToFrontAndExpand() }
+            SyncOverlayBubble.update(formatSyncPercent(state.syncTask), state.syncTask.mode)
             state.overlayBubbleActive = true
         }
     }

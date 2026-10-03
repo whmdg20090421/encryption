@@ -84,8 +84,11 @@ object SyncOverlayBubble {
 
     private var onBubbleClick: (() -> Unit)? = null
 
-    /** 球内上传箭头的循环动画；随悬浮球 show/dismiss 启停。 */
+    /** 球内方向箭头的循环动画；随悬浮球 show/dismiss 启停。 */
     private var arrowAnimator: android.animation.ValueAnimator? = null
+
+    /** 当前同步方向，决定箭头图标与穿越方向（上传向上、下载向下）。 */
+    private var syncMode: SyncMode = SyncMode.LOCAL_TO_CLOUD
 
     /** 是否处于锁定态（锁定后禁用拖动与贴边，右下角显示锁图标）。 */
     private var locked = false
@@ -111,15 +114,17 @@ object SyncOverlayBubble {
      * 显示悬浮球。[onClick] 在"可点击状态下触发（贴边态下第一次点击用于解除贴边）。
      * 重复调用只更新点击回调与文本，不重复安装。
      */
-    fun show(context: Context, onClick: () -> Unit) {
+    fun show(context: Context, mode: SyncMode = SyncMode.LOCAL_TO_CLOUD, onClick: () -> Unit) {
         mainHandler.post {
             onBubbleClick = onClick
+            syncMode = mode
             if (!canShow(context)) return@post
 
             // 已有实例：FloatingX 同 tag 复用，或本对象的控制权仍在
             val existing = control ?: FloatingX.controlOrNull(TAG)
             if (existing != null && existing.state != FxState.CANCELLED) {
                 control = existing
+                updateArrowDrawable()
                 renderLabel()
                 if (!existing.isShowing) existing.show()
                 startArrowAnimation()
@@ -153,19 +158,42 @@ object SyncOverlayBubble {
             longPressConsumed = false
             control = c
             c.show()
+            updateArrowDrawable()
             renderLabel()
             startArrowAnimation()
         }
     }
 
     /** 刷新球上的进度文本（两位小数）。会按当前贴边方向重新排版。 */
-    fun update(percentText: String) {
+    fun update(percentText: String, mode: SyncMode = SyncMode.LOCAL_TO_CLOUD) {
         rawLabelText = percentText
         if (Looper.myLooper() == Looper.getMainLooper()) {
+            applyMode(mode)
             renderLabel()
         } else {
-            mainHandler.post { renderLabel() }
+            mainHandler.post {
+                applyMode(mode)
+                renderLabel()
+            }
         }
+    }
+
+    /** 同步当前方向：若方向变化，更新箭头图标并按新方向重启穿越动画。 */
+    private fun applyMode(mode: SyncMode) {
+        if (syncMode == mode) return
+        syncMode = mode
+        updateArrowDrawable()
+        if (snapEdge == null) startArrowAnimation()
+    }
+
+    /** 依据当前方向切换箭头图标（上传 ↑ / 下载 ↓）。 */
+    private fun updateArrowDrawable() {
+        control?.contentView
+            ?.findViewById<android.widget.ImageView>(R.id.fx_bubble_arrow)
+            ?.setImageResource(
+                if (syncMode == SyncMode.CLOUD_TO_LOCAL) R.drawable.ic_sync_bubble_download_arrow
+                else R.drawable.ic_sync_bubble_upload_arrow
+            )
     }
 
     /** 移除悬浮球。任务结束/取消/异常都必须调用。 */
@@ -272,8 +300,14 @@ object SyncOverlayBubble {
                 val arrow = control?.contentView?.findViewById<android.widget.ImageView>(R.id.fx_bubble_arrow)
                     ?: return@addUpdateListener
                 val fraction = anim.animatedValue as Float
-                // 从球心下方 (+0.5×行程) 平移到上方 (-0.5×行程)，穿过球体
-                arrow.translationY = (0.5f - fraction) * ARROW_TRAVEL_FACTOR * arrow.height
+                // 上传：从球心下方 (+0.5×行程) 平移到上方 (-0.5×行程)，穿过球体；
+                // 下载：方向相反，从上方 (-0.5×行程) 平移到下方 (+0.5×行程)。
+                val travel = if (syncMode == SyncMode.CLOUD_TO_LOCAL) {
+                    (-0.5f + fraction) * ARROW_TRAVEL_FACTOR * arrow.height
+                } else {
+                    (0.5f - fraction) * ARROW_TRAVEL_FACTOR * arrow.height
+                }
+                arrow.translationY = travel
                 // 进入/穿出两端渐显渐隐，中段保持峰值，避免生硬闪现
                 arrow.alpha = ARROW_MAX_ALPHA * arrowAlphaFactor(fraction)
             }
