@@ -1,9 +1,15 @@
 package com.whmdg.mczj.tools.ui.filemanager
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -24,7 +30,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,6 +91,75 @@ internal fun StandardDialog(
             }
         }
     }
+}
+
+// ── 路径跳转对话框 ──
+@Composable
+internal fun PathJumpDialog(
+    show: Boolean,
+    currentPath: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    if (!show) return
+    val context = LocalContext.current
+    val focusRequester = remember { FocusRequester() }
+    var value by remember {
+        mutableStateOf(TextFieldValue(currentPath, selection = TextRange(0, currentPath.length)))
+    }
+    LaunchedEffect(currentPath) {
+        value = TextFieldValue(currentPath, selection = TextRange(0, currentPath.length))
+    }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    val submit = {
+        val text = value.text.trim()
+        if (text.isNotEmpty()) onConfirm(text)
+    }
+    StandardDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("跳转路径") },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .focusRequester(focusRequester),
+                placeholder = { Text("输入绝对路径") },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { submit() })
+            )
+        },
+        leadingButton = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cb.setPrimaryClip(ClipData.newPlainText("path", value.text))
+                    Toast.makeText(context, "路径已复制", Toast.LENGTH_SHORT).show()
+                }) { Text("复制") }
+                TextButton(onClick = {
+                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = cb.primaryClip
+                    val pasted = if (clip != null && clip.itemCount > 0) {
+                        clip.getItemAt(0).coerceToText(context).toString()
+                    } else ""
+                    if (pasted.isNotEmpty()) {
+                        value = TextFieldValue(pasted, selection = TextRange(pasted.length))
+                    } else {
+                        Toast.makeText(context, "剪贴板为空", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("粘贴") }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = submit) { Text("确认") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 // ── 新建类型选择对话框 ──

@@ -153,11 +153,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -175,6 +171,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 
 enum class FocusedPanel { LEFT, RIGHT;
     val index: Int get() = ordinal
@@ -309,10 +306,31 @@ fun FileManagerScreen(
 
     // 来自其他界面的定位请求（如安装包提取完成后点击「定位」）：
     // 以请求对象为 key，首次进入时面板初始化与定位在同一帧，或文件管理器已在栈顶时直接定位。
-    LaunchedEffect(AppNavigation.pendingFileManager) {
-        val req = AppNavigation.consumeFileManager() ?: return@LaunchedEffect
-        vm.focusedPanel = FocusedPanel.LEFT
-        vm.navigateToWithScroll(req.path)
+    // 跳转目标为「当前聚焦面板」：聚焦面板在保险箱内时先弹出密钥销毁警告，确认后才跳转。
+    // 关键：必须先回到文件管理器（界面可见）再消费请求，避免在提取安装包的 Activity 上就弹窗；
+    // 故先缓存目标路径，挂起等待 Lifecycle RESUMED 且首帧绘制后再处理。
+    var pendingLocatePath by remember { mutableStateOf<String?>(null) }
+    val locateLifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(AppNavigation.pendingFileManager, locateLifecycleOwner) {
+        if (AppNavigation.pendingFileManager == null) return@LaunchedEffect
+        locateLifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            val req = AppNavigation.consumeFileManager() ?: return@repeatOnLifecycle
+            pendingLocatePath = req.path
+        }
+    }
+    LaunchedEffect(pendingLocatePath) {
+        val path = pendingLocatePath ?: return@LaunchedEffect
+        // 等首帧绘制完成，确保文件管理器以原路径可见后再弹窗
+        withFrameNanos { }
+        val jump = { vm.navigateToWithScroll(path) }
+        if (vm.currentPanel.path is PanelPath.Vault) {
+            pendingVaultExitAction = jump
+            showVaultExitDialog = true
+        } else {
+            jump()
+        }
+        // 处理完再清空，避免在挂起点之前触发 effect 重启而被取消
+        pendingLocatePath = null
     }
 
     // 回到前台（从后台切回 / 息屏点亮 / 从其他 Activity 返回）时刷新双面板，
@@ -396,10 +414,8 @@ fun FileManagerScreen(
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
-    // ── 路径栏手动输入（点击标题进入编辑，回车跳转） ──
+    // ── 路径栏手动输入（点击标题弹出居中跳转对话框） ──
     var isEditingPath by remember { mutableStateOf(false) }
-    var pathInput by remember { mutableStateOf("") }
-    val pathFocusRequester = remember { FocusRequester() }
     var showFontSizeDialog by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
@@ -614,6 +630,8 @@ fun FileManagerScreen(
     var showAddQaDialog by remember { mutableStateOf(false) }
     var showVaultExitDialog by remember { mutableStateOf(false) }
     var showVaultSyncDialog by remember { mutableStateOf(false) }
+    // 保险箱退出警告确认后要执行的动作（如定位跳转、进入回收站）；null 表示默认「退出文件管理器」
+    var pendingVaultExitAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     // ── WebDAV 快捷访问 ──
     var showQaTypeSelector by remember { mutableStateOf(false) }
@@ -899,13 +917,6 @@ fun FileManagerScreen(
 
     val currentPath = vm.currentPath
 
-    // 进入路径编辑态后自动聚焦并弹出输入法
-    LaunchedEffect(isEditingPath) {
-        if (isEditingPath) pathFocusRequester.requestFocus()
-    }
-    // 路径编辑态下返回手势：退出编辑而不执行返回上级/退出
-    BackHandler(enabled = isEditingPath) { isEditingPath = false }
-
     Scaffold(
         topBar = {
             Surface(
@@ -933,50 +944,16 @@ fun FileManagerScreen(
                             }
                             else -> currentPath
                         }
-                        if (isEditingPath) {
-                            TextField(
-                                value = pathInput,
-                                onValueChange = { pathInput = it },
-                                singleLine = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(pathFocusRequester),
-                                textStyle = MaterialTheme.typography.titleMedium,
-                                placeholder = { Text("输入绝对路径", style = MaterialTheme.typography.titleMedium) },
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                                keyboardActions = KeyboardActions(
-                                    onGo = {
-                                        isEditingPath = false
-                                        vm.jumpToPath(pathInput)
-                                        vm.pathJumpError?.let { err ->
-                                            messageDialogData = com.whmdg.mczj.tools.ui.MessageDialogData(
-                                                title = "无法跳转",
-                                                errorSummary = err
-                                            )
-                                            vm.pathJumpError = null
-                                        }
-                                    }
-                                ),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+                        StartEllipsisText(
+                            text = titleText,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (titleEditable) Modifier.clickable {
+                                        isEditingPath = true
+                                    } else Modifier
                                 )
-                            )
-                        } else {
-                            StartEllipsisText(
-                                text = titleText,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(
-                                        if (titleEditable) Modifier.clickable {
-                                            pathInput = currentPath
-                                            isEditingPath = true
-                                        } else Modifier
-                                    )
-                            )
-                        }
+                        )
                     },
                     navigationIcon = {
                         IconButton(onClick = { showDrawer = true }) {
@@ -2529,7 +2506,12 @@ fun FileManagerScreen(
                                             icon = Icons.Default.Delete,
                                             label = "回收站",
                                             onClick = {
-                                                vm.enterRecycleBin()
+                                                if (vm.currentPanel.path is PanelPath.Vault) {
+                                                    pendingVaultExitAction = { vm.enterRecycleBin() }
+                                                    showVaultExitDialog = true
+                                                } else {
+                                                    vm.enterRecycleBin()
+                                                }
                                                 showDrawer = false
                                             }
                                         )
@@ -3686,6 +3668,24 @@ fun FileManagerScreen(
         )
     }
 
+    // ── 路径跳转对话框 ──
+    PathJumpDialog(
+        show = isEditingPath,
+        currentPath = vm.currentPath,
+        onDismiss = { isEditingPath = false },
+        onConfirm = { path ->
+            isEditingPath = false
+            vm.jumpToPath(path)
+            vm.pathJumpError?.let { err ->
+                messageDialogData = com.whmdg.mczj.tools.ui.MessageDialogData(
+                    title = "无法跳转",
+                    errorSummary = err
+                )
+                vm.pathJumpError = null
+            }
+        }
+    )
+
     // ── 新建类型选择对话框 ──
     CreateTypeDialog(
         show = showCreateTypeDialog,
@@ -4018,19 +4018,21 @@ fun FileManagerScreen(
     // ── 保险箱退出确认对话框 ──
     if (showVaultExitDialog) {
         StandardDialog(
-            onDismissRequest = { showVaultExitDialog = false },
+            onDismissRequest = { showVaultExitDialog = false; pendingVaultExitAction = null },
             title = { Text("离开加密保险箱") },
             text = { Text("你将离开加密保险箱，重新进入需要重新从加密入口进入，密钥将会被销毁。") },
             confirmButton = {
                 TextButton(onClick = {
                     showVaultExitDialog = false
+                    val action = pendingVaultExitAction
+                    pendingVaultExitAction = null
                     // 销毁所有保险箱面板的密钥，并将面板重置到各自主目录
                     vm.exitVaultMode()
-                    onBack()
+                    if (action != null) action() else onBack()
                 }) { Text("确认") }
             },
             dismissButton = {
-                TextButton(onClick = { showVaultExitDialog = false }) { Text("取消") }
+                TextButton(onClick = { showVaultExitDialog = false; pendingVaultExitAction = null }) { Text("取消") }
             }
         )
     }
