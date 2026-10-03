@@ -372,11 +372,6 @@ fun CloudSyncScreen(
         // 逐箱打开 SyncDatabase 查询、walkTopDown 遍历磁盘都是阻塞 I/O，
         // 绝不能占用主线程，否则首帧被拖住，列表长时间空白。
         if (saved.isNotEmpty()) {
-            val folderSizeDbRef = async(Dispatchers.IO) {
-                com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
-                    com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
-                )
-            }
             val refreshed = saved.map { item ->
                 async(Dispatchers.IO) {
                     if (item.type != "保险箱" || item.vaultId <= 0) return@async item
@@ -386,7 +381,7 @@ fun CloudSyncScreen(
                     val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                         context, vault.location, vault.relativePath
                     ).absolutePath
-                    val localSize = folderSizeDbRef.await().getNormalized(vaultDirPath)?.size ?: 0L
+                    val localSize = com.whmdg.mczj.tools.encryption.data.FolderSizeStore.peekSize(vaultDirPath) ?: 0L
                     val localFileCount = try {
                         val dir = java.io.File(vaultDirPath)
                         if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
@@ -446,13 +441,10 @@ fun CloudSyncScreen(
             processedVaultIds.add(vault.id)
             val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vault.name)
             val stats = syncDb.getStats()
-            val folderSizeDb = com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
-                com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
-            )
             val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                 context, vault.location, vault.relativePath
             ).absolutePath
-            val localSize = folderSizeDb.getNormalized(vaultDirPath)?.size ?: 0L
+            val localSize = com.whmdg.mczj.tools.encryption.data.FolderSizeStore.peekSize(vaultDirPath) ?: 0L
             val localFileCount = try {
                 val dir = java.io.File(vaultDirPath)
                 if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
@@ -822,15 +814,12 @@ fun CloudSyncScreen(
                                     val vaultName = syncItems[idx].vaultName
                                     val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
                                     val stats = syncDb.getStats()
-                                    val folderSizeDb = com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
-                                        com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
-                                    )
                                     val vault = vaultService.getVault(vaultId)
                                     val localSize = if (vault != null) {
                                         val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                                             context, vault.location, vault.relativePath
                                         ).absolutePath
-                                        folderSizeDb.getNormalized(vaultDirPath)?.size ?: 0L
+                                        com.whmdg.mczj.tools.encryption.data.FolderSizeStore.peekSize(vaultDirPath) ?: 0L
                                     } else 0L
                                     syncItems[idx] = syncItems[idx].copy(
                                         diffFileCount = stats.diffCount,
@@ -1155,8 +1144,7 @@ fun CloudSyncScreen(
                                         webdavConfig = recoveryConfig!!,
                                         vaultDir = recoveryVaultDir,
                                         vaultId = recoveryVaultId,
-                                        vaultName = recoveryVaultName,
-                                        folderSizeDb = { com.whmdg.mczj.tools.encryption.data.FolderSizeDb() }
+                                        vaultName = recoveryVaultName
                                     )
                                     val dbUploaded = controller.uploadCloudDb(
                                         com.whmdg.mczj.tools.ui.filemanager.DbUploadFeedback.SILENT

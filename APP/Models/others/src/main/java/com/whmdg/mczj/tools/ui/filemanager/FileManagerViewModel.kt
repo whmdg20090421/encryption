@@ -19,8 +19,8 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.SizeCalcManager
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
-import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStaging
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStore
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellException
 import com.whmdg.mczj.tools.security.ShellExecutor
@@ -127,8 +127,7 @@ class FilePaneController(
     // 共享设置通过 lambda 注入（由 Coordinator 维护实际值）
     private val showHiddenFiles: () -> Boolean,
     private val sortField: () -> SortField,
-    private val sortOrder: () -> SortOrder,
-    private val folderSizeDb: () -> FolderSizeDb
+    private val sortOrder: () -> SortOrder
 ) {
     // ── Vault 会话（每个 Controller 独立持有，由 Coordinator 注入） ──
     var vaultSession by mutableStateOf<VaultSession?>(null)
@@ -732,10 +731,11 @@ class FilePaneController(
                     withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.then(nameComparator.reversed()))
             }
             SortField.SIZE -> {
+                // 一次批量取目录大小，避免比较器内逐次查库
+                val dirSizes = FolderSizeStore.peekSizes(withCreationTime.filter { it.isDirectory }.map { it.path })
                 fun effectiveSize(entry: FileEntry): Long {
                     if (!entry.isDirectory) return entry.size
-                    val cached = folderSizeDb().getNormalized(entry.path)
-                    return cached?.size ?: -1L
+                    return dirSizes[entry.path] ?: -1L
                 }
                 if (sortOrder() == SortOrder.ASC)
                     withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
@@ -1102,11 +1102,11 @@ class FilePaneController(
             else
                 entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
             SortField.SIZE -> {
-                // 获取条目的有效大小：文件用 entry.size，已统计目录用 folderSizeDb()，未统计目录用 -1
+                // 获取条目的有效大小：文件用 entry.size，已统计目录读取缓存，未统计目录用 -1
+                val dirSizes = FolderSizeStore.peekSizes(entries.filter { it.isDirectory }.map { it.path })
                 fun effectiveSize(entry: FileEntry): Long {
                     if (!entry.isDirectory) return entry.size
-                    val cached = folderSizeDb().getNormalized(entry.path)
-                    return cached?.size ?: -1L // -1 表示未统计
+                    return dirSizes[entry.path] ?: -1L // -1 表示未统计
                 }
                 if (sortOrder() == SortOrder.ASC)
                     entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
@@ -1837,7 +1837,7 @@ class FilePaneController(
         } else ""
 
         val sizeDisplay = if (entry.isDirectory) {
-            val cached = folderSizeDb().getNormalized(entry.path)
+            val cached = FolderSizeStore.peek(entry.path)
             val bytes = cached?.size ?: 0L
             if (bytes > 0) "${formatSize(bytes)} ($bytes)" else "0 B (0)"
         } else {
@@ -2781,8 +2781,7 @@ class PanelCoordinator(
     val left: FilePaneController,
     val right: FilePaneController,
     private val context: Context,
-    private val getFocusedPanel: () -> FocusedPanel,
-    private val folderSizeDb: () -> FolderSizeDb
+    private val getFocusedPanel: () -> FocusedPanel
 ) {
     init {
         // 注入回调：Controller 内部进入压缩包模式时，由 Coordinator 保存会话栈缓存
@@ -2945,25 +2944,22 @@ class PanelCoordinator(
     /**
      * 计算根目录大小 = 所有直接子项的大小之和（深度为1）。
      * 文件：加文件本身的大小
-     * 子文件夹：加该文件夹在 FolderSizeDb 中的缓存值
+     * 子文件夹：加该文件夹在大小记录中的缓存值
      */
     private fun calculateRootSize(vaultPath: String, entries: List<FileEntry>) {
-        val db = folderSizeDb()
         var totalSize = 0L
         for (entry in entries) {
             if (entry.isDirectory) {
-                // 子文件夹：从 FolderSizeDb 读取缓存大小
-                val cached = db.getNormalized(entry.path)
+                // 子文件夹：读取缓存大小
+                val cached = FolderSizeStore.peek(entry.path)
                 totalSize += cached?.size ?: 0L
             } else {
                 // 文件：直接加文件大小
                 totalSize += entry.size
             }
         }
-        // 更新 FolderSizeDb 中根目录的大小
-        val saveDir = AppDataPaths.fileManager(context)
-        db.put(vaultPath, FolderSizeInfo(totalSize, System.currentTimeMillis()))
-        db.save(saveDir)
+        // 更新根目录大小记录
+        FolderSizeStore.saveSize(vaultPath, totalSize, System.currentTimeMillis())
         // 刷新面板显示
         refreshBoth()
     }
@@ -3040,7 +3036,6 @@ class PanelCoordinator(
             vaultDir = vaultDir,
             vaultId = vaultId,
             vaultName = vaultName,
-            folderSizeDb = folderSizeDb,
             vaultSession = vaultSession
         )
 
@@ -3147,8 +3142,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             safeDefault = safeDefault,
             showHiddenFiles = { showHiddenFiles },
             sortField = { sortField },
-            sortOrder = { sortOrder },
-            folderSizeDb = { folderSizeDb }
+            sortOrder = { sortOrder }
         )
     }
     private val controllerRight by lazy {
@@ -3161,14 +3155,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             safeDefault = safeDefault,
             showHiddenFiles = { showHiddenFiles },
             sortField = { sortField },
-            sortOrder = { sortOrder },
-            folderSizeDb = { folderSizeDb }
+            sortOrder = { sortOrder }
         )
     }
 
     // ── 面板协调者（唯一知道两个面板存在的角色） ──
     val panels: PanelCoordinator by lazy {
-        PanelCoordinator(controllerLeft, controllerRight, getApplication(), { focusedPanel }, { folderSizeDb })
+        PanelCoordinator(controllerLeft, controllerRight, getApplication(), { focusedPanel })
     }
 
     // ── 面板状态引用（向后兼容：UI 通过 vm.左/vm.右 访问） ──
@@ -3203,8 +3196,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     // 最近一次 listDirEntriesViaShell 的 stderr，用于调用方判断失败原因
     private var lastShellStderr = ""
-    var folderSizeDb by mutableStateOf(FolderSizeDb())
-        private set
     var refreshVersion by mutableStateOf(0L)
         private set
 
@@ -3410,7 +3401,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         fileNameFontSize = fmPrefs.getFloat("file_name_font_size", 12f)
 
         // 加载文件夹大小数据库
-        folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
+        FolderSizeStore.init(getApplication())
 
         // 记录各面板主目录（退出保险箱 / 从非加密入口进入时回到这里）
         controllerLeft.homePath = lHome
@@ -3549,11 +3540,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun syncWouldDestroyVault() = panels.syncWouldDestroyVault()
     fun refreshBoth() = panels.refreshBoth()
 
-    /** 局部更新 FolderSizeDb 中受影响路径的大小，然后刷新两个面板 */
+    /** 局部更新受影响路径的大小，然后刷新两个面板 */
     fun updateFolderSizesAndRefresh(sizes: Map<String, Long>) {
         val now = System.currentTimeMillis()
         for ((path, size) in sizes) {
-            folderSizeDb.put(path, com.whmdg.mczj.tools.encryption.data.FolderSizeInfo(size, now))
+            FolderSizeStore.saveSize(path, size, now)
         }
         refreshBoth()
     }
@@ -4185,7 +4176,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * - 长按入口：传入文件夹自身路径
      * - 批量入口（菜单/排序）：传入当前面板路径作为父目录
      *
-     * 完成后将 FolderSizeDb 持久化并刷新当前面板列表。
+     * 统计结果先写入内存暂存区，完整成功时自动提交；中断/失败时保留暂存，
+     * 由「保存/丢弃」弹窗决定是否落库。完成后刷新当前面板列表。
      */
     fun calculateFolderSizeAsync(rootPath: String, onTotalSizeReady: ((Long) -> Unit)? = null) {
         if (SizeCalcManager.isCalculating) {
@@ -4194,9 +4186,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val permission = detectMaxAvailablePermission()
         val accessor = FileAccessor.create(permission, context)
-        val saveDir = AppDataPaths.fileManager(context)
-        SizeCalcManager.begin(folderSizeDb, saveDir, onDiscard = {
-            folderSizeDb = FolderSizeDb.load(saveDir)
+        val staging = FolderSizeStaging.create()
+        SizeCalcManager.begin(staging, onDiscard = {
             refreshCurrent()
         })
         viewModelScope.launch(Dispatchers.IO) {
@@ -4204,7 +4195,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 calculateFolderSize(
                     rootPath = rootPath,
                     accessor = accessor,
-                    db = folderSizeDb,
+                    db = staging,
                     onTotal = { total -> SizeCalcManager.onTotal(total) },
                     onScanned = { count, folder -> SizeCalcManager.onScanned(count, folder) },
                     onProgress = { p, t, f -> SizeCalcManager.onProgress(p, t, f) },
@@ -4218,14 +4209,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 when (result) {
                     is SizeCalcResult.Success -> {
-                        folderSizeDb.save(saveDir)
-                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        FolderSizeStore.commitStaging(staging)
+                        SizeCalcManager.releaseStaging()
                         refreshCurrent()
                         SizeCalcManager.finish(result.rootSize, result.tree)
                         onTotalSizeReady?.invoke(result.rootSize)
                     }
                     is SizeCalcResult.PermissionDenied -> {
-                        // 弹窗询问用户是否保存已统计的部分结果
+                        // 保留暂存区，弹窗询问用户是否保存已统计的部分结果
                         SizeCalcManager.finish()
                         SizeCalcManager.pendingSaveDialog = true
                         SizeCalcManager.loadError = RuntimeException(
@@ -4233,14 +4224,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                     is SizeCalcResult.Failed -> {
-                        // 弹窗询问用户是否保存已统计的部分结果
+                        // 保留暂存区，弹窗询问用户是否保存已统计的部分结果
                         SizeCalcManager.finish()
                         SizeCalcManager.pendingSaveDialog = true
                         SizeCalcManager.loadError = RuntimeException("统计失败: ${result.reason}")
                     }
                     is SizeCalcResult.Cancelled -> {
                         // 用户取消，丢弃本次数据
-                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        SizeCalcManager.releaseStaging()
                         refreshCurrent()
                         SizeCalcManager.finish()
                     }
@@ -4251,16 +4242,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 删除指定目录的大小缓存（含子树），保存并刷新当前列表。 */
     fun deleteSizeCacheAndRefresh(path: String) {
-        folderSizeDb.removeDescendants(path)
-        val saveDir = AppDataPaths.fileManager(context)
-        folderSizeDb.save(saveDir)
-        folderSizeDb = FolderSizeDb.load(saveDir)
+        FolderSizeStore.removeDescendants(path)
+        FolderSizeStore.flush()
         refreshCurrent()
     }
 
     /** 忽略缓存，强制全量重新统计指定目录大小。 */
     fun recalculateFolderSizeForce(path: String) {
-        folderSizeDb.removeDescendants(path)
+        FolderSizeStore.removeDescendants(path)
+        FolderSizeStore.flush()
         calculateFolderSizeAsync(path)
     }
 

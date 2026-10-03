@@ -45,7 +45,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 
 import androidx.compose.ui.graphics.painter.BitmapPainter
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStore
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
@@ -1536,7 +1536,6 @@ fun FileManagerScreen(
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                     },
                                     modifier = Modifier,
-                                    folderSizeDb = vm.folderSizeDb,
                                     parentPath = parentPaths[1],
                                     lazyListState = listStates[1],
                                     onNavigateUp = {
@@ -1620,7 +1619,6 @@ fun FileManagerScreen(
                                         vm.focusedPanel = side
                                     },
                                     modifier = Modifier,
-                                    folderSizeDb = vm.folderSizeDb,
                                     parentPath = parentPaths[idx],
                                     lazyListState = listStates[idx],
                                     onNavigateUp = {
@@ -5037,7 +5035,7 @@ fun FileManagerScreen(
                         val currentEntries = vm.currentPanel.entries
                         val unmeasured = currentEntries.filter { entry ->
                             if (!entry.isDirectory) return@filter false
-                            val cached = vm.folderSizeDb.getNormalized(entry.path)
+                            val cached = FolderSizeStore.peek(entry.path)
                             if (cached != null) return@filter false // 已统计
                             // 检查是否空文件夹或权限不足（受保护路径走 shell）
                             val children = vm.listChildrenOrNull(entry.path)
@@ -6097,7 +6095,6 @@ private fun FileBrowserPanel(
     onFileClick: (FileEntry) -> Unit,
     onLongClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
-    folderSizeDb: FolderSizeDb = FolderSizeDb(),
     parentPath: String? = null,
     onNavigateUp: () -> Unit = {},
     lazyListState: LazyListState = rememberLazyListState(),
@@ -6129,6 +6126,13 @@ private fun FileBrowserPanel(
             seen[base] = n
             entry to if (n == 1) base else "$base#$n"
         }
+    }
+
+    // 目录大小：订阅 version，一次批量查询整个目录，避免逐行查库（N+1）。
+    val folderSizeVersion = FolderSizeStore.version
+    val dirSizeCache = remember(entries, folderSizeVersion) {
+        val dirPaths = entries.filter { it.isDirectory }.map { it.path }
+        if (dirPaths.isEmpty()) emptyMap() else FolderSizeStore.peekSizes(dirPaths)
     }
 
     // 视频缩略图：FIFO 队列 + 磁盘缓存
@@ -6224,10 +6228,10 @@ private fun FileBrowserPanel(
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
-                            val cached = folderSizeDb.getNormalized(entry.path)
-                            if (cached != null) {
-                                if (cached.size == 0L) "0MB"
-                                else compactSize(cached.size)
+                            val size = dirSizeCache[entry.path]
+                            if (size != null) {
+                                if (size == 0L) "0MB"
+                                else compactSize(size)
                             } else ""
                         }
                     } else if (archiveSizeProvider != null) {

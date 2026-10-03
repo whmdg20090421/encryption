@@ -2,8 +2,7 @@ package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
 import com.whmdg.mczj.tools.AppDataPaths
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
-import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStore
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ShellEscape
 import kotlinx.coroutines.runBlocking
@@ -154,8 +153,6 @@ class DeleteJob(
      */
     private fun updateFolderSizeDb() {
         if (deletedSizeDelta == 0L) return
-        val saveDir = AppDataPaths.fileManager(context)
-        val db = FolderSizeDb.load(saveDir)
         val affectedSizes = mutableMapOf<String, Long>()
 
         // 直接使用传入的 vaultDir，与 CopyJob.accumulateFolderSize 保持一致
@@ -167,9 +164,9 @@ class DeleteJob(
 
             // 移除被删除路径及其所有子路径
             if (entry.isDirectory) {
-                db.removeDescendants(normalizedEntryPath)
+                FolderSizeStore.removeDescendants(normalizedEntryPath)
             } else {
-                db.remove(normalizedEntryPath)
+                FolderSizeStore.remove(normalizedEntryPath)
             }
 
             // 从被删除文件的父目录开始，逐层向上冒泡减去 delta
@@ -179,15 +176,15 @@ class DeleteJob(
             while (dir != null) {
                 val key = dir.path.trimEnd('/')
                 if (!key.startsWith(vaultRoot)) break
-                val oldSize = db.get(key)?.size ?: 0L
+                val oldSize = FolderSizeStore.peek(key)?.size ?: 0L
                 val newSize = maxOf(0L, oldSize - entrySize)
-                db.put(key, FolderSizeInfo(newSize, System.currentTimeMillis()))
+                FolderSizeStore.saveSize(key, newSize, System.currentTimeMillis())
                 affectedSizes[key] = newSize
                 dir = dir.parentFile
             }
         }
 
-        db.save(saveDir)
+        FolderSizeStore.flush()
         manager.notifyFolderSizeChanged(affectedSizes)
     }
 

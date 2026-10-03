@@ -1,9 +1,7 @@
 package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
-import com.whmdg.mczj.tools.AppDataPaths
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
-import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStore
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.services.CryptoService
@@ -816,7 +814,7 @@ class CopyJob(
     }
 
     /**
-     * 将本次任务累计的目录大小增量持久化到 FolderSizeDb，且仅执行一次。
+     * 将本次任务累计的目录大小增量持久化到大小记录库，且仅执行一次。
      *
      * 本任务是保险箱目录体积的唯一持久化出口（由 [run] 的 finally 调用）：
      * accumulator 只累计已成功加密落盘的文件，取消/失败的残留文件从未计入，
@@ -839,20 +837,18 @@ class CopyJob(
         }
     }
 
-    /** 将累加的目录大小写入 FolderSizeDb（存储在应用私有目录，不污染保险箱） */
+    /** 将累加的目录大小写入记录库（存储在应用私有目录，不污染保险箱） */
     private fun saveFolderSizes(vaultDir: File, accumulator: Map<String, Long>) {
         if (accumulator.isEmpty()) return
-        val saveDir = AppDataPaths.fileManager(context)
-        val db = FolderSizeDb.load(saveDir)
         val updatedSizes = mutableMapOf<String, Long>()
         for ((path, delta) in accumulator) {
-            val existing = db.get(path)?.size ?: 0L
+            val existing = FolderSizeStore.peek(path)?.size ?: 0L
             val newSize = existing + delta
-            db.put(path, FolderSizeInfo(newSize, System.currentTimeMillis()))
+            FolderSizeStore.saveSize(path, newSize, System.currentTimeMillis())
             updatedSizes[path] = newSize
         }
-        db.save(saveDir)
-        // 通知 UI 局部刷新 FolderSizeDb（传递更新后的完整大小，而非 delta）
+        FolderSizeStore.flush()
+        // 通知 UI 局部刷新（传递更新后的完整大小，而非 delta）
         manager.notifyFolderSizeChanged(updatedSizes)
     }
 

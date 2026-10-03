@@ -78,6 +78,8 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
         com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore.ensureInitialized(this)
+        // 文件夹大小缓存：绑定 Context、执行旧 JSON/文本 → SQLite 一次性迁移、启动定时落库
+        com.whmdg.mczj.tools.encryption.data.FolderSizeStore.init(this)
 
         // OCR 悬浮窗：监听应用前后台切换
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(

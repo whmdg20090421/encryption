@@ -114,14 +114,9 @@ fun EncryptionHomeScreen(
     var showMenu by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
-    val folderSizeDb = remember {
-        com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
-            com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
-        )
-    }
-    // 读取 version 触发 recomposition：CopyJob 写入 FolderSizeDb 后 version 递增
+    // 读取 version 触发 recomposition：写入记录后 version 递增
     @Suppress("UNUSED_VARIABLE")
-    val folderSizeVersion = folderSizeDb.version
+    val folderSizeVersion = com.whmdg.mczj.tools.encryption.data.FolderSizeStore.version
     var showImportDialog by remember { mutableStateOf(false) }
     var importFolderUri by remember { mutableStateOf<Uri?>(null) }
     var importFolderName by remember { mutableStateOf("") }
@@ -199,7 +194,7 @@ fun EncryptionHomeScreen(
                     .padding(innerPadding)
             ) {
                 when (subTab) {
-                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate, folderSizeDb = folderSizeDb)
+                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
                     1 -> CloudSyncScreen(
                         vaultService = vaultService,
                         events = cloudSyncEvents,
@@ -308,7 +303,7 @@ fun EncryptionHomeScreen(
                                     Text(
                                         buildString {
                                             val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).path.trimEnd('/')
-                                            val size = folderSizeDb.get(vaultDirPath)?.size ?: 0L
+                                            val size = com.whmdg.mczj.tools.encryption.data.FolderSizeStore.peek(vaultDirPath)?.size ?: 0L
                                             append(if (size > 0) FormatUtils.formatBytes(size) else "未统计")
                                         },
                                         fontSize = 12.sp,
@@ -527,8 +522,7 @@ fun EncryptionHomeScreen(
 fun VaultsListTab(
     vaultService: VaultService,
     settings: EncryptionSettings,
-    onNavigate: (Screen) -> Unit,
-    folderSizeDb: com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+    onNavigate: (Screen) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -973,7 +967,7 @@ fun VaultsListTab(
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 大小占位
                                 val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).path.trimEnd('/')
-                                val vaultSize = folderSizeDb.get(vaultDirPath)?.size ?: 0L
+                                val vaultSize = com.whmdg.mczj.tools.encryption.data.FolderSizeStore.peek(vaultDirPath)?.size ?: 0L
                                 // 文件数只读本地缓存（解锁成功时后台统计写回），此处不做任何目录遍历
                                 val vaultFileCount = vault.fileCount
                                 VaultInfoRow("存储用量", buildString {

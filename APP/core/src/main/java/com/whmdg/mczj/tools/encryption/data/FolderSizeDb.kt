@@ -1,125 +1,173 @@
 package com.whmdg.mczj.tools.encryption.data
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.Snapshot
+import android.content.ContentValues
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
+/** 单条路径的大小缓存：字节数 + 修改时间（毫秒）。 */
 data class FolderSizeInfo(
     val size: Long = 0,
     val lastModified: Long = 0
 )
 
 /**
- * 文件夹大小数据库（v1.2 文本格式）。
- * 文件第一行为版本标识 "v1.2"，不匹配则删除重建。
- * 行格式：`<绝对路径>\t<size>\t<mtime>`
+ * 大小缓存读写接口。
  *
- * 全局单例：同一个 dir 只会创建一个实例，所有调用方共享同一份内存数据。
- * [version] 供 Compose 观察，任何写操作自动递增触发 recomposition。
+ * 供批量统计算法 [com.whmdg.mczj.tools.util.calculateFolderSize] 使用：
+ * 算法只依赖这三个操作，从而既能直接写入 [FolderSizeDb]（即时持久化），
+ * 也能写入内存暂存区（统计期间不落盘，由用户确认后一次性提交）。
  */
-class FolderSizeDb() {
+interface FolderSizeCache {
+    fun get(path: String): FolderSizeInfo?
+    fun bulkPut(updates: Map<String, FolderSizeInfo>)
+    fun removeDescendants(path: String)
+}
+
+/**
+ * 文件夹大小数据库（SQLite，`folder_sizes.db`）。
+ *
+ * ## 为什么用 SQLite
+ *
+ * 早期实现把「路径 → 大小」全量序列化成一个文本/JSON 文件，任何一次写入都要重写整个
+ * 文件、启动时也要把全部条目读进内存。条目规模到达十万~百万级后写放大与内存占用都
+ * 不可接受。SQLite 以 `path` 为主键：
+ *   - 单条写入 = 一行 `INSERT OR REPLACE`，O(1)，不再全量重写；
+ *   - 单条查询走主键索引，O(log N)，无需把全表读入内存；
+ *   - 批量写入合并到一笔事务，避免逐条 fsync；
+ *   - 开启 WAL，读写不互斥，多通道加密/解密时元数据写入不再互相阻塞。
+ *
+ * 本类是**存储层**，只负责增删改查；应用层统一走 [FolderSizeStore] 门面。
+ */
+class FolderSizeDb private constructor(
+    context: Context,
+    dbFile: File
+) : SQLiteOpenHelper(context.applicationContext, dbFile.absolutePath, null, DB_VERSION), FolderSizeCache {
+
     companion object {
-        private const val CURRENT_VERSION = "v1.2"
-        private const val FILE_NAME = "folder_sizes.txt"
+        private const val DB_VERSION = 1
+        private const val TABLE = "folder_sizes"
+        private const val COL_PATH = "path"
+        private const val COL_SIZE = "size"
+        private const val COL_MTIME = "last_modified"
 
-        private val cache = HashMap<String, FolderSizeDb>()
+        /** `path IN (...)` 单条 SQL 的最大变量数，按 SQLite 保守上限取 900。 */
+        private const val SQLITE_IN_LIMIT = 900
 
-        fun load(dir: File): FolderSizeDb {
-            val key = dir.canonicalPath
-            cache[key]?.let { return it }
-            val db = FolderSizeDb()
-            val file = File(dir, FILE_NAME)
-            if (file.exists()) {
-                try {
-                    val lines = file.readLines()
-                    if (lines.isNotEmpty() && lines[0] == CURRENT_VERSION) {
-                        for (i in 1 until lines.size) {
-                            val line = lines[i]
-                            if (line.isBlank()) continue
-                            val parts = line.split("\t")
-                            if (parts.size >= 2) {
-                                val path = parts[0]
-                                val size = parts[1].toLongOrNull() ?: 0L
-                                val mtime = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                                db.folders[path] = FolderSizeInfo(size, mtime)
-                            }
-                        }
-                    } else {
-                        file.delete()
-                    }
-                } catch (_: Exception) {
-                    file.delete()
-                }
+        private val instances = HashMap<String, FolderSizeDb>()
+
+        /** 取得本进程单例（按 DB 文件绝对路径缓存）。 */
+        fun getInstance(context: Context): FolderSizeDb {
+            val dbFile = AppDataPaths.folderSizeDb(context)
+            return synchronized(this) {
+                instances[dbFile.absolutePath]
+                    ?: FolderSizeDb(context.applicationContext, dbFile)
+                        .also { instances[dbFile.absolutePath] = it }
             }
-            cache[key] = db
-            return db
         }
+
+        /** 路径归一化：统一去除尾部 `/`。 */
+        private fun normalize(path: String): String = path.trimEnd('/')
     }
 
-    val folders: MutableMap<String, FolderSizeInfo> = mutableMapOf()
-
-    /** 保护 [folders] 的并发读写（多通道加密/解密时会被并行访问）。 */
-    private val lock = Any()
-
-    /** 版本计数器：每次写操作递增，Compose 读取此字段可触发 recomposition */
-    var version by mutableStateOf(0)
-        private set
-
-    private fun bumpVersion() {
-        // 后台线程写入时需要进入 snapshot，确保主线程 Compose 能观察到变更
-        Snapshot.withMutableSnapshot { version++ }
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE (
+                $COL_PATH  TEXT PRIMARY KEY,
+                $COL_SIZE  INTEGER NOT NULL,
+                $COL_MTIME INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
     }
 
-    fun save(dir: File) {
-        val snapshot = synchronized(lock) { folders.toMap() }
-        val file = File(dir, FILE_NAME)
-        val sb = StringBuilder()
-        sb.appendLine(CURRENT_VERSION)
-        for ((path, info) in snapshot) {
-            sb.appendLine("$path\t${info.size}\t${info.lastModified}")
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        // WAL：读写不互斥，多通道写入不互相阻塞。
+        db.enableWriteAheadLogging()
+    }
+
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // 纯缓存，可由重新扫描重建，版本变更直接弃表重建。
+        db.execSQL("DROP TABLE IF EXISTS $TABLE")
+        onCreate(db)
+    }
+
+    // ── 查询 ──
+
+    /** 按路径读取（自动归一化）。不存在返回 null。 */
+    override fun get(path: String): FolderSizeInfo? {
+        val key = normalize(path)
+        readableDatabase.query(
+            TABLE, arrayOf(COL_SIZE, COL_MTIME),
+            "$COL_PATH = ?", arrayOf(key), null, null, null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) return FolderSizeInfo(cursor.getLong(0), cursor.getLong(1))
         }
-        file.writeText(sb.toString())
+        return null
     }
 
-    fun get(path: String): FolderSizeInfo? = synchronized(lock) { folders[path] }
-
-    /** 规范化查找：去除尾部 / 后再匹配，避免目录路径格式不一致导致查不到 */
-    fun getNormalized(path: String): FolderSizeInfo? = synchronized(lock) { folders[path.trimEnd('/')] }
-
-    fun put(path: String, info: FolderSizeInfo) {
-        synchronized(lock) { folders[path] = info }
-        bumpVersion()
-    }
-
-    fun bulkPut(updates: Map<String, FolderSizeInfo>) {
-        synchronized(lock) { folders.putAll(updates) }
-        bumpVersion()
-    }
-
-    fun remove(path: String) {
-        synchronized(lock) { folders.remove(path) }
-        bumpVersion()
-    }
-
-    fun removeDescendants(path: String) {
-        val prefix = if (path.isEmpty()) "" else "$path/"
-        synchronized(lock) { folders.keys.removeAll { it == path || it.startsWith(prefix) } }
-        bumpVersion()
-    }
-
-    /** 读取子树范围内（含 rootPath 自身）所有记录，用于差异统计快照。 */
-    fun getDescendants(rootPath: String): Map<String, FolderSizeInfo> {
-        val prefix = if (rootPath.isEmpty()) "" else "$rootPath/"
-        val result = HashMap<String, FolderSizeInfo>()
-        synchronized(lock) {
-            for ((path, info) in folders) {
-                if (path == rootPath || path.startsWith(prefix)) {
-                    result[path] = info
+    /**
+     * 批量读取多个路径的大小（以调用方传入的原始路径为键）。
+     * 分块执行 `path IN (...)` 以规避 SQLite 变量数上限；未命中的路径不出现。
+     */
+    fun getSizes(paths: Collection<String>): Map<String, Long> {
+        if (paths.isEmpty()) return emptyMap()
+        val keyToOriginal = HashMap<String, String>(paths.size)
+        val result = HashMap<String, Long>(paths.size)
+        for (p in paths) keyToOriginal[normalize(p)] = p
+        val keys = keyToOriginal.keys.toList()
+        for (chunk in keys.chunked(SQLITE_IN_LIMIT)) {
+            val placeholders = chunk.joinToString(",") { "?" }
+            readableDatabase.query(
+                TABLE, arrayOf(COL_PATH, COL_SIZE),
+                "$COL_PATH IN ($placeholders)", chunk.toTypedArray(), null, null, null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val key = cursor.getString(0)
+                    keyToOriginal[key]?.let { result[it] = cursor.getLong(1) }
                 }
             }
         }
         return result
     }
+
+    // ── 写入 ──
+
+    /** 批量写入：合并到一笔事务，避免逐条 fsync。 */
+    override fun bulkPut(updates: Map<String, FolderSizeInfo>) {
+        if (updates.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for ((path, info) in updates) {
+                db.insertWithOnConflict(
+                    TABLE, null, contentValues(normalize(path), info), SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 删除路径自身及其所有后代。 */
+    override fun removeDescendants(path: String) {
+        val key = normalize(path)
+        val prefix = "$key/"
+        writableDatabase.delete(
+            TABLE, "$COL_PATH = ? OR ($COL_PATH >= ? AND $COL_PATH < ?)",
+            arrayOf(key, prefix, prefix + "\uFFFF")
+        )
+    }
+
+    private fun contentValues(path: String, info: FolderSizeInfo): ContentValues =
+        ContentValues(3).apply {
+            put(COL_PATH, path)
+            put(COL_SIZE, info.size)
+            put(COL_MTIME, info.lastModified)
+        }
 }

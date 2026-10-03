@@ -130,6 +130,20 @@ object AppDataPaths {
         return dir
     }
 
+    /** 文件夹大小数据库（SQLite）文件。 */
+    fun folderSizeDb(context: Context): File {
+        return File(fileManager(context), "folder_sizes.db")
+    }
+
+    /** 旧版文件夹大小文本缓存（v1.1/v1.2），迁移后删除。 */
+    fun legacyFolderSizeTxt(context: Context): File {
+        return File(fileManager(context), "folder_sizes.txt")
+    }
+
+    /** 旧版文件夹大小 JSON 缓存，迁移后删除。 */
+    fun legacyFolderSizeJson(context: Context): File {
+        return File(fileManager(context), "folder_sizes.json")
+    }
 
     /** 压缩包密码本文件（每行一个密码，UTF-8） */
     fun archivePasswordBook(context: Context): File {
@@ -452,6 +466,9 @@ object AppDataPaths {
     /** 文件管理器 SharedPreferences（同一个界面的设置存在同一个 XML） */
     const val PREFS_FILE_MANAGER = "file_manager_prefs"
 
+    /** 文件夹大小缓存是否已从旧文本/JSON 迁移到 SQLite 数据库（存于 PREFS_FILE_MANAGER） */
+    const val PREF_KEY_FOLDER_SIZE_DB_MIGRATED = "folder_size_db_migrated"
+
     /** 文件管理器快捷访问 SharedPreferences */
     const val PREFS_QUICK_ACCESS = "quick_access_prefs"
 
@@ -618,16 +635,19 @@ object AppDataPaths {
     }
 
     /**
-     * 迁移 folder_sizes.json（文件管理器 FolderSizeDb）。
+     * 将散落在 filesDir 根目录的旧版文件夹大小缓存搬入文件管理器模块目录。
      * 独立于 scattered_migrated，因为该文件在后期才加入 AppDataPaths 体系。
+     * 覆盖历史两种格式：folder_sizes.json（初版）与 folder_sizes.txt（v1.1/v1.2）。
      */
     private fun migrateFolderSizeDb(context: Context) {
         val marker = globalSettingsMarker(context, ".folder_size_migrated")
         if (marker.exists()) return
-        val src = File(context.filesDir, "folder_sizes.json")
-        if (src.exists()) {
-            val dst = File(fileManager(context), "folder_sizes.json")
-            if (!dst.exists()) src.renameTo(dst)
+        for (name in listOf("folder_sizes.json", "folder_sizes.txt")) {
+            val src = File(context.filesDir, name)
+            if (src.exists()) {
+                val dst = File(fileManager(context), name)
+                if (!dst.exists()) src.renameTo(dst)
+            }
         }
         runCatching { marker.writeText("1") }
     }

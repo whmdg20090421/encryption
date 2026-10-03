@@ -6,7 +6,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
@@ -51,7 +50,6 @@ class CloudPaneController(
     private val vaultDir: String,
     private val vaultId: Int,
     private val vaultName: String,
-    private val folderSizeDb: () -> FolderSizeDb,
     private val vaultSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
 ) {
     val state = CloudPanelState()

@@ -1,6 +1,6 @@
 package com.whmdg.mczj.tools.util
 
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.encryption.data.FolderSizeCache
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,7 +34,7 @@ data class SizeTreeNode(
 suspend fun calculateFolderSize(
     rootPath: String,
     accessor: FileAccessor,
-    db: FolderSizeDb,
+    db: FolderSizeCache,
     onTotal: (total: Int) -> Unit,
     onScanned: (count: Int, currentFolder: String) -> Unit,
     onProgress: (processed: Int, total: Int, currentFolder: String) -> Unit,

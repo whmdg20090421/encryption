@@ -6,11 +6,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStaging
+import com.whmdg.mczj.tools.encryption.data.FolderSizeStore
 import com.whmdg.mczj.tools.util.FormatUtils.formatBytes
 import com.whmdg.mczj.tools.util.SizeTreeNode
-import kotlinx.coroutines.delay
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -70,28 +69,43 @@ object SizeCalcManager {
     /** 供 ShellExecutor 使用的取消标志（与 cancelRequested 同步） */
     val cancelFlag = AtomicBoolean(false)
 
-    /** 当前正在计算的 db 引用，用于手动保存 */
-    private var currentDb: FolderSizeDb? = null
-    private var saveDir: File? = null
-    /** 丢弃回调（由 FileManagerViewModel 注册，用于重载 DB） */
+    /** 当前统计的内存暂存区，用户确认后由 [save] 提交 */
+    private var currentStaging: FolderSizeStaging? = null
+    /** 丢弃回调（由 FileManagerViewModel 注册，用于刷新面板） */
     private var onDiscard: (() -> Unit)? = null
 
     fun requestCancel() { cancelRequested = true; cancelFlag.set(true) }
 
-    /** 用户点击"保存"：将当前已计算的结果持久化 */
-    fun save() { currentDb?.save(saveDir ?: return) }
+    /**
+     * 用户点击"保存"：将当前已统计的结果提交落库。
+     * 暂存区不清空——统计若随后中断，错误弹窗的「保存」仍能提交同一份数据。
+     */
+    fun save() {
+        currentStaging?.let { FolderSizeStore.commitStaging(it) }
+    }
 
     /** 错误弹窗：用户选择保存已统计的部分结果 */
     fun confirmSavePartial() {
-        currentDb?.save(saveDir ?: return)
+        currentStaging?.let { FolderSizeStore.commitStaging(it) }
+        clearStaging()
         pendingSaveDialog = false
     }
 
     /** 错误弹窗：用户选择丢弃本次数据 */
     fun discardPartial() {
+        val discard = onDiscard
+        clearStaging()
         pendingSaveDialog = false
-        onDiscard?.invoke()
+        discard?.invoke()
     }
+
+    private fun clearStaging() {
+        currentStaging = null
+        onDiscard = null
+    }
+
+    /** 统计正常完成或取消后调用，释放暂存区引用（不再参与后续保存/丢弃）。 */
+    internal fun releaseStaging() = clearStaging()
 
     /** 关闭状态提示 */
     fun dismissStatus() { statusMessage = null; completedSize = -1L; completedTree = null }
@@ -101,8 +115,8 @@ object SizeCalcManager {
         binderCooldownSeconds = secondsLeft
     }
 
-    internal fun begin(db: FolderSizeDb, saveDir: File, onDiscard: (() -> Unit)? = null) {
-        currentDb = db; this.saveDir = saveDir
+    internal fun begin(staging: FolderSizeStaging, onDiscard: (() -> Unit)? = null) {
+        currentStaging = staging
         this.onDiscard = onDiscard
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
@@ -135,11 +149,15 @@ object SizeCalcManager {
         currentFolder = folder
     }
 
+    /**
+     * 结束本次统计。**不清空暂存区**——统计中断时需保留暂存数据，
+     * 供随后的「保存/丢弃」弹窗使用；暂存区由 [begin] 或 [clearStaging] 释放。
+     */
     internal fun finish(size: Long = -1L, tree: SizeTreeNode? = null) {
         isCalculating = false
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
-        cancelRequested = false; cancelFlag.set(false); currentDb = null; saveDir = null; onDiscard = null
+        cancelRequested = false; cancelFlag.set(false)
         binderCooldownSeconds = 0
         completedSize = size
         completedTree = tree
