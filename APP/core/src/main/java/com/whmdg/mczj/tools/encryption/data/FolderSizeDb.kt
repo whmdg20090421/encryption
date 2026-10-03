@@ -14,16 +14,14 @@ data class FolderSizeInfo(
 )
 
 /**
- * 大小缓存读写接口。
+ * 大小缓存写入接口。
  *
- * 供批量统计算法 [com.whmdg.mczj.tools.util.calculateFolderSize] 使用：
- * 算法只依赖这三个操作，从而既能直接写入 [FolderSizeDb]（即时持久化），
- * 也能写入内存暂存区（统计期间不落盘，由用户确认后一次性提交）。
+ * 统计算法 [com.whmdg.mczj.tools.util.calculateFolderSize] 只依赖这一个写入操作，
+ * 从而既能直接写入 [FolderSizeDb]（即时持久化），也能写入内存暂存区
+ * （统计期间不落盘，由用户确认后一次性提交）。
  */
 interface FolderSizeCache {
-    fun get(path: String): FolderSizeInfo?
     fun bulkPut(updates: Map<String, FolderSizeInfo>)
-    fun removeDescendants(path: String)
 }
 
 /**
@@ -99,7 +97,7 @@ class FolderSizeDb private constructor(
     // ── 查询 ──
 
     /** 按路径读取（自动归一化）。不存在返回 null。 */
-    override fun get(path: String): FolderSizeInfo? {
+    fun get(path: String): FolderSizeInfo? {
         val key = normalize(path)
         readableDatabase.query(
             TABLE, arrayOf(COL_SIZE, COL_MTIME),
@@ -135,6 +133,26 @@ class FolderSizeDb private constructor(
         return result
     }
 
+    /**
+     * 读取路径自身及其所有后代的记录（范围查询子树）。
+     * 供刷新时做「旧集合 - 新集合」差集，找出已消失的条目。
+     */
+    fun getDescendants(rootPath: String): Map<String, FolderSizeInfo> {
+        val key = normalize(rootPath)
+        val prefix = "$key/"
+        val out = LinkedHashMap<String, FolderSizeInfo>()
+        readableDatabase.query(
+            TABLE, arrayOf(COL_PATH, COL_SIZE, COL_MTIME),
+            "$COL_PATH = ? OR ($COL_PATH >= ? AND $COL_PATH < ?)",
+            arrayOf(key, prefix, prefix + "\uFFFF"), null, null, null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                out[cursor.getString(0)] = FolderSizeInfo(cursor.getLong(1), cursor.getLong(2))
+            }
+        }
+        return out
+    }
+
     // ── 写入 ──
 
     /** 批量写入：合并到一笔事务，避免逐条 fsync。 */
@@ -154,8 +172,31 @@ class FolderSizeDb private constructor(
         }
     }
 
+    /**
+     * 子树差量写入：在**一笔事务**内先按精确路径删除 [removedPaths]，
+     * 再插入/更新 [updates]。用于刷新时只写变化项、删消失项，避免全量重写。
+     */
+    fun applyDiff(updates: Map<String, FolderSizeInfo>, removedPaths: Collection<String>) {
+        if (updates.isEmpty() && removedPaths.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (path in removedPaths) {
+                db.delete(TABLE, "$COL_PATH = ?", arrayOf(normalize(path)))
+            }
+            for ((path, info) in updates) {
+                db.insertWithOnConflict(
+                    TABLE, null, contentValues(normalize(path), info), SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     /** 删除路径自身及其所有后代。 */
-    override fun removeDescendants(path: String) {
+    fun removeDescendants(path: String) {
         val key = normalize(path)
         val prefix = "$key/"
         writableDatabase.delete(

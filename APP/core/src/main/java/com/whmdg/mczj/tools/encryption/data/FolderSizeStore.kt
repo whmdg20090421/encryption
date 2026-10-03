@@ -9,7 +9,6 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.FileAccessor
-import com.whmdg.mczj.tools.util.ShellEscape
 import com.whmdg.mczj.tools.util.SizeCalcResult
 import com.whmdg.mczj.tools.util.calculateFolderSize
 import kotlinx.coroutines.CoroutineScope
@@ -148,22 +147,36 @@ object FolderSizeStore {
     }
 
     /**
-     * 提交内存暂存区的统计结果：先应用子树删除，再合并写入，最后一笔事务落库。
-     * 统计完整成功、或用户在弹窗选择「保存」时调用。
+     * 提交内存暂存区的统计结果。
+     *
+     * 读取库里该子树的旧记录，若 [deleteMissing] 为 true（完整快照）则删掉
+     * 「本次已不存在」的条目，并只写入「新增 / size 或 mtime 变化」的条目，
+     * 最后一笔事务落库。统计完整成功、或用户在弹窗选择「保存」时调用。
+     *
+     * @param deleteMissing 是否删除本次未扫描到的旧记录。完整扫描为 true；
+     *   部分成功（存在不可读子目录）为 false，防止误删漏扫数据。
      */
-    fun commitStaging(staging: FolderSizeStaging) {
-        val removes = staging.removedSnapshot()
+    fun commitStaging(staging: FolderSizeStaging, deleteMissing: Boolean) {
         val writes = staging.stagedSnapshot()
-        if (removes.isEmpty() && writes.isEmpty()) return
-        synchronized(lock) {
-            for (key in removes) {
-                val prefix = "$key/"
-                pending.keys.removeAll { it == key || it.startsWith(prefix) }
-                pendingRemoveDesc.add(key)
+        if (writes.isEmpty()) return
+        // 先把缓冲中的增量写入落库，确保下方读取的「旧记录」是最新的，
+        // 避免提交的扫描结果被尚未落库的增量写入覆盖（或反之）。
+        synchronized(lock) { flushLocked() }
+        val db = dbInternal()
+        val existing = db.getDescendants(staging.rootPath)
+        val scanned = if (deleteMissing) staging.scannedPaths() else emptySet()
+        val removed = if (scanned.isNotEmpty()) existing.keys.filter { it !in scanned } else emptyList()
+
+        val changed = LinkedHashMap<String, FolderSizeInfo>()
+        for ((path, info) in writes) {
+            val old = existing[path]
+            if (old == null || old.size != info.size || old.lastModified != info.lastModified) {
+                changed[path] = info
             }
-            pending.putAll(writes)
         }
-        flush()
+        if (changed.isEmpty() && removed.isEmpty()) return
+        db.applyDiff(changed, removed)
+        bumpVersion()
     }
 
     /** 将缓冲区合并为一笔事务落库。可由生命周期回收点显式调用。 */
@@ -178,6 +191,8 @@ object FolderSizeStore {
         val writes = LinkedHashMap(pending)
         pending.clear()
         pendingRemoveDesc.clear()
+        // pendingRemoveDesc 既有「精确单条删除」也有「子树删除」，
+        // 统一按子树删除即可同时覆盖两种情况（子树删除含路径自身）。
         for (key in removes) db.removeDescendants(key)
         db.bulkPut(writes)
     }
@@ -251,69 +266,29 @@ object FolderSizeStore {
     private fun computeRealtimeAndStore(path: String): Long? {
         val context = requireContext()
         val accessor = FileAccessor.create(detectAccessLevel(context), context)
-        val mtime = accessor.statMtime(path) ?: return null
-
-        if (!isDirectory(accessor, path)) {
-            // 普通文件：直接取 stat 大小
-            val size = statFileSize(accessor, path) ?: return null
-            saveSize(path, size, mtime)
-            return size
-        }
-
+        val staging = FolderSizeStaging.create(path)
         val result = runBlocking {
             calculateFolderSize(
                 rootPath = path,
                 accessor = accessor,
-                db = DiscardCache,
-                onTotal = {},
-                onScanned = { _, _ -> },
-                onProgress = { _, _, _ -> },
+                cache = staging,
                 isCancelled = { false },
-                onBinderCooldown = null,
                 cancelFlag = null
             )
         }
         return when (result) {
             is SizeCalcResult.Success -> {
-                val size = result.rootSize
-                saveSize(path, size, mtime)
-                size
+                commitStaging(staging, deleteMissing = result.fullSnapshot)
+                result.rootSize
             }
             else -> null
         }
-    }
-
-    private fun isDirectory(accessor: FileAccessor, path: String): Boolean {
-        // NORMAL 通道无 shell：优先用 Java File API；不可见时再走 shell（ROOT/SHIZUKU）
-        val file = File(path)
-        if (file.exists()) return file.isDirectory
-        val escaped = ShellEscape.escape(path)
-        val (_, _, exit) = accessor.exec("test -d $escaped")
-        return exit == 0
-    }
-
-    private fun statFileSize(accessor: FileAccessor, path: String): Long? {
-        val escaped = ShellEscape.escape(path)
-        val (out, _, exit) = accessor.exec("stat -c %s $escaped")
-        if (exit == 0) {
-            out.trim().toLongOrNull()?.let { return it }
-        }
-        // NORMAL 通道无 shell：回退 Java File API
-        val file = File(path)
-        return if (file.exists() && file.isFile) file.length() else null
     }
 
     private fun detectAccessLevel(context: Context): FileAccessLevel = when {
         SpecialPermissionVerifier.isRootAvailable() -> FileAccessLevel.ROOT
         SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
         else -> FileAccessLevel.NORMAL
-    }
-
-    /** 丢弃型缓存：实时计算时不产生任何落库副作用。 */
-    private object DiscardCache : FolderSizeCache {
-        override fun get(path: String): FolderSizeInfo? = null
-        override fun bulkPut(updates: Map<String, FolderSizeInfo>) {}
-        override fun removeDescendants(path: String) {}
     }
 
     // ── 一次性迁移：旧 JSON / 文本 → SQLite ──

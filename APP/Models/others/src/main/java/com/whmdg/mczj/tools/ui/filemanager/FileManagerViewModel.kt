@@ -4186,7 +4186,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val permission = detectMaxAvailablePermission()
         val accessor = FileAccessor.create(permission, context)
-        val staging = FolderSizeStaging.create()
+        val staging = FolderSizeStaging.create(rootPath)
         SizeCalcManager.begin(staging, onDiscard = {
             refreshCurrent()
         })
@@ -4195,13 +4195,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 calculateFolderSize(
                     rootPath = rootPath,
                     accessor = accessor,
-                    db = staging,
-                    onTotal = { total -> SizeCalcManager.onTotal(total) },
-                    onScanned = { count, folder -> SizeCalcManager.onScanned(count, folder) },
-                    onProgress = { p, t, f -> SizeCalcManager.onProgress(p, t, f) },
+                    cache = staging,
+                    onScanned = { count, path -> SizeCalcManager.onScanned(count, path) },
                     isCancelled = { SizeCalcManager.cancelRequested },
-                    cancelFlag = SizeCalcManager.cancelFlag,
-                    onBinderCooldown = { sec -> SizeCalcManager.onBinderCooldown(sec) }
+                    cancelFlag = SizeCalcManager.cancelFlag
                 )
             } catch (e: Throwable) {
                 SizeCalcResult.Failed(e.message ?: "未知错误")
@@ -4209,24 +4206,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 when (result) {
                     is SizeCalcResult.Success -> {
-                        FolderSizeStore.commitStaging(staging)
-                        SizeCalcManager.releaseStaging()
-                        refreshCurrent()
-                        SizeCalcManager.finish(result.rootSize, result.tree)
-                        onTotalSizeReady?.invoke(result.rootSize)
-                    }
-                    is SizeCalcResult.PermissionDenied -> {
-                        // 保留暂存区，弹窗询问用户是否保存已统计的部分结果
-                        SizeCalcManager.finish()
-                        SizeCalcManager.pendingSaveDialog = true
-                        SizeCalcManager.loadError = RuntimeException(
-                            "权限不足，部分目录无法访问\n路径: ${result.path}"
-                        )
+                        if (result.fullSnapshot) {
+                            // 完整扫描：自动提交（含删除消失项）并结束
+                            FolderSizeStore.commitStaging(staging, deleteMissing = true)
+                            SizeCalcManager.releaseStaging()
+                            refreshCurrent()
+                            SizeCalcManager.finish(result.rootSize, result.tree)
+                            onTotalSizeReady?.invoke(result.rootSize)
+                        } else {
+                            // 部分成功（存在不可读子目录）：保留暂存区，弹窗询问是否保存。
+                            // 不传 tree，避免树形弹窗与保存询问弹窗同时出现。
+                            SizeCalcManager.setFullSnapshot(false)
+                            SizeCalcManager.finish()
+                            SizeCalcManager.pendingSaveDialog = true
+                            SizeCalcManager.loadError = RuntimeException(
+                                "部分目录无法访问，已扫描的结果可能不完整"
+                            )
+                        }
                     }
                     is SizeCalcResult.Failed -> {
-                        // 保留暂存区，弹窗询问用户是否保存已统计的部分结果
+                        // 扫描失败（未取得任何数据），直接丢弃暂存区并报错
+                        SizeCalcManager.releaseStaging()
+                        refreshCurrent()
                         SizeCalcManager.finish()
-                        SizeCalcManager.pendingSaveDialog = true
                         SizeCalcManager.loadError = RuntimeException("统计失败: ${result.reason}")
                     }
                     is SizeCalcResult.Cancelled -> {

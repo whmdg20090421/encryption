@@ -1,7 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -16,30 +15,25 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 文件夹大小统计进度管理（全局单例）。
  * FolderSizeCalculator 写入进度，MainAppContainer 读取并显示进度条。
  *
- * 状态流转：begin → onTotal → onScanned×N → finish
- *   - begin: "正在统计文件夹数量..."
- *   - onTotal: 切换到进度条显示
- *   - onScanned: 进度条实时更新
+ * 状态流转：begin → onScanned×N → finish
+ *   - begin: "正在扫描目录..."
+ *   - onScanned: 实时更新已扫描条目数
  *   - finish: "已统计完成，大小: XXX"（持久显示，直到下次 begin 或用户关闭）
+ *
+ * 单条 find 递归扫描无法预先得知总条目数，故不显示百分比进度，只显示已扫描数量。
  */
 object SizeCalcManager {
-    /** 0f ~ 1f，进度 = scannedCount / totalCount */
-    var progress by mutableFloatStateOf(0f)
-        set
-    /** 当前正在处理的目录名 */
+    /** 当前正在处理的路径 */
     var currentFolder by mutableStateOf("")
         set
-    /** BFS 已扫描的目录数 */
+    /** 已扫描的条目数（文件+目录） */
     var scannedCount by mutableIntStateOf(0)
-        set
-    /** 总目录数（find 统计） */
-    var totalCount by mutableIntStateOf(0)
         set
     /** 是否正在计算（从 begin 到 finish） */
     var isCalculating by mutableStateOf(false)
         private set
 
-    /** 状态提示（持久显示：正在统计/进度/完成/报错） */
+    /** 状态提示（持久显示：正在统计/完成/报错） */
     var statusMessage by mutableStateOf<String?>(null)
         set
     /** 统计完成后显示的大小 */
@@ -51,10 +45,6 @@ object SizeCalcManager {
 
     /** 报错弹窗 */
     var loadError by mutableStateOf<Throwable?>(null)
-        set
-
-    /** Binder 冷却倒计时（秒），0 = 未在冷却 */
-    var binderCooldownSeconds by mutableIntStateOf(0)
         set
 
     /** 是否弹出"保存进度？"对话框 */
@@ -71,6 +61,8 @@ object SizeCalcManager {
 
     /** 当前统计的内存暂存区，用户确认后由 [save] 提交 */
     private var currentStaging: FolderSizeStaging? = null
+    /** 本次统计是否为完整快照（决定提交时是否删除消失项） */
+    private var currentFullSnapshot = false
     /** 丢弃回调（由 FileManagerViewModel 注册，用于刷新面板） */
     private var onDiscard: (() -> Unit)? = null
 
@@ -81,12 +73,12 @@ object SizeCalcManager {
      * 暂存区不清空——统计若随后中断，错误弹窗的「保存」仍能提交同一份数据。
      */
     fun save() {
-        currentStaging?.let { FolderSizeStore.commitStaging(it) }
+        currentStaging?.let { FolderSizeStore.commitStaging(it, deleteMissing = currentFullSnapshot) }
     }
 
     /** 错误弹窗：用户选择保存已统计的部分结果 */
     fun confirmSavePartial() {
-        currentStaging?.let { FolderSizeStore.commitStaging(it) }
+        currentStaging?.let { FolderSizeStore.commitStaging(it, deleteMissing = currentFullSnapshot) }
         clearStaging()
         pendingSaveDialog = false
     }
@@ -101,52 +93,39 @@ object SizeCalcManager {
 
     private fun clearStaging() {
         currentStaging = null
+        currentFullSnapshot = false
         onDiscard = null
     }
 
     /** 统计正常完成或取消后调用，释放暂存区引用（不再参与后续保存/丢弃）。 */
     internal fun releaseStaging() = clearStaging()
 
+    /** 标记本次统计是否为完整快照（提交时决定是否删除消失项）。 */
+    internal fun setFullSnapshot(full: Boolean) { currentFullSnapshot = full }
+
     /** 关闭状态提示 */
     fun dismissStatus() { statusMessage = null; completedSize = -1L; completedTree = null }
 
-    /** Binder 冷却倒计时（由 FolderSizeCalculator 回调） */
-    internal suspend fun onBinderCooldown(secondsLeft: Int) {
-        binderCooldownSeconds = secondsLeft
-    }
-
     internal fun begin(staging: FolderSizeStaging, onDiscard: (() -> Unit)? = null) {
         currentStaging = staging
+        currentFullSnapshot = false
         this.onDiscard = onDiscard
-        progress = 0f; currentFolder = ""
-        scannedCount = 0; totalCount = 0
+        currentFolder = ""
+        scannedCount = 0
         cancelRequested = false; cancelFlag.set(false); loadError = null
         completedSize = -1L
         completedTree = null
-        binderCooldownSeconds = 0
         pendingSaveDialog = false
         isCalculating = true
-        statusMessage = "正在统计文件夹数量..."
+        statusMessage = "正在扫描目录..."
     }
 
-    /** BFS 前：统计总目录数，切换到进度条模式 */
-    internal fun onTotal(total: Int) {
-        if (total > 0) {
-            totalCount = total
-            statusMessage = null  // 切换到进度条显示
-        }
-    }
-
-    /** BFS 阶段：每扫描一个目录调用 */
-    internal fun onScanned(count: Int, folder: String) {
+    /** 扫描阶段：每积累一批条目调用，展示已扫描数量 */
+    internal fun onScanned(count: Int, path: String) {
         scannedCount = count
-        currentFolder = folder
-        progress = if (totalCount > 0) count.toFloat() / totalCount else 0f
-    }
-
-    /** 累加阶段（微秒级，可忽略） */
-    internal fun onProgress(processed: Int, total: Int, folder: String) {
-        currentFolder = folder
+        currentFolder = path
+        // 已有扫描数据后切换到「已扫描 N 个条目」显示
+        statusMessage = null
     }
 
     /**
@@ -155,10 +134,9 @@ object SizeCalcManager {
      */
     internal fun finish(size: Long = -1L, tree: SizeTreeNode? = null) {
         isCalculating = false
-        progress = 0f; currentFolder = ""
-        scannedCount = 0; totalCount = 0
+        currentFolder = ""
+        scannedCount = 0
         cancelRequested = false; cancelFlag.set(false)
-        binderCooldownSeconds = 0
         completedSize = size
         completedTree = tree
         statusMessage = if (size >= 0) {

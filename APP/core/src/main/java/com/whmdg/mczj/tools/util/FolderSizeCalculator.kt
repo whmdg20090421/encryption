@@ -2,7 +2,6 @@ package com.whmdg.mczj.tools.util
 
 import com.whmdg.mczj.tools.encryption.data.FolderSizeCache
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
-import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 大小统计树形节点（文件或目录）。 */
@@ -15,163 +14,127 @@ data class SizeTreeNode(
 )
 
 /**
- * 文件夹大小统计核心算法（双内存 A/B 架构）。
+ * 文件夹大小统计核心算法（单命令递归扫描 + 自底向上求和）。
  *
- * 入口：[calculateFolderSize]
+ * ## 流程
+ *   1. **一次递归扫描**：[FileAccessor.scanTree] 用单条 `find` 命令流式列出
+ *      rootPath 及其整棵子树里的所有文件与目录（路径 / 类型 / 大小 / mtime），
+ *      取代旧的「逐目录 listChildren」上千次 shell 往返。
+ *   2. **分拣**：文件记录自身 size；目录记录自身 mtime，并按父子关系归集
+ *      直接子文件字节和与直接子目录。
+ *   3. **自底向上求和**：按路径长度从大到小（越深越长）遍历目录，目录累计大小 =
+ *      直接文件字节和 + 直接子目录累计大小。
+ *   4. **产出完整快照**：把文件与目录的最终 `(size, mtime)` 全部交给 [cache] 暂存。
+ *      是否写库、删除消失项由提交层（[com.whmdg.mczj.tools.encryption.data.FolderSizeStore.commitStaging]）
+ *      与持久层做差集决定——本算法只负责给出「当前真实状态」。
  *
- * 算法流程：
- *   1. BFS 阶段：无条件扫描 rootPath 下所有子目录，构建目录树（内存 A）
- *   2. 构建内存 B：按 A 中每个路径从 DB 查缓存，有则填入 size+mtime，无则为空
- *   3. 从叶子向根逐层处理：
- *      - 查 B：有值且 mtime 未变 → 复用 B 的 size（缓存命中）
- *      - B 无值或 mtime 变化 → 列出直接子项，累加文件大小 + 子文件夹 size（从 A 读取）
- *   4. 写缓存：先 removeDescendants 清除旧子树（含已删除目录），再 bulkPut 写入 A 的数据
+ * ## 与旧实现的区别
+ *   - 不再用「目录 mtime 是否变化」判断是否重算（改文件内容不会改目录 mtime，
+ *     旧的目录级判断会漏检）。所有文件大小每轮都由扫描直接得到，天然准确。
+ *   - 目录 mtime 仅作为属性随扫描结果存储，不参与复用判断。
  *
- * 进度回调：
- *   - BFS 阶段：每扫描一个目录调用 onScanned
- *   - 累加阶段：每计算完一个目录调用 onProgress
+ * @param onScanned 已扫描条目数回调（用于进度显示），第二个参数为最近一条路径
  */
 suspend fun calculateFolderSize(
     rootPath: String,
     accessor: FileAccessor,
-    db: FolderSizeCache,
-    onTotal: (total: Int) -> Unit,
-    onScanned: (count: Int, currentFolder: String) -> Unit,
-    onProgress: (processed: Int, total: Int, currentFolder: String) -> Unit,
-    isCancelled: () -> Boolean,
-    onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null,
+    cache: FolderSizeCache,
+    onScanned: (count: Int, currentPath: String) -> Unit = { _, _ -> },
+    isCancelled: () -> Boolean = { false },
     cancelFlag: AtomicBoolean? = null
 ): SizeCalcResult {
-    // ── 0. 统计总目录数（用于进度条） ──
-    val escaped = ShellEscape.escape(rootPath)
-    val (countOut, countErr, countExit) = accessor.exec("find $escaped -type d | wc -l", cancelFlag)
-    if (isCancelled()) return SizeCalcResult.Cancelled
-    val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
-    onTotal(totalDirs)
+    val normalizedRoot = if (rootPath == "/") "/" else rootPath.trimEnd('/').ifEmpty { "/" }
 
-    // ── 1. BFS 阶段：扫描目录树，构建内存 A ──
-    // children: 目录路径 → 直接子项列表（含文件和子目录）
-    // dirMtimes: 目录路径 → 该目录本身的 mtime
-    // depth: 目录路径 → 深度（rootPath=0）
-    val children = LinkedHashMap<String, List<DirEntry>>()
+    // 扫描期间的分拣容器
+    val fileSizes = HashMap<String, Long>()
+    val fileMtimes = HashMap<String, Long>()
     val dirMtimes = HashMap<String, Long>()
-    val depth = HashMap<String, Int>()
-    var result: SizeCalcResult? = null
-
-    // rootPath 自身的 mtime 需要单独 stat（BFS 只能从父目录获取子目录 mtime）
-    dirMtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
-    val queue = ArrayDeque<Pair<String, Int>>()
-    queue.add(rootPath to 0)
-    depth[rootPath] = 0
-
+    val allDirs = HashSet<String>()
+    /** 目录 → 其直接子文件字节和 */
+    val dirFileSum = HashMap<String, Long>()
+    /** 目录 → 其直接子目录列表 */
+    val dirChildren = HashMap<String, MutableList<String>>()
+    /** 目录 → 其直接子文件 (路径, 大小) 列表 */
+    val dirFiles = HashMap<String, MutableList<Pair<String, Long>>>()
     var scanned = 0
-    while (queue.isNotEmpty()) {
-        if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-        val (dir, d) = queue.removeFirst()
-        val listChildrenStart = System.currentTimeMillis()
-        val list = accessor.listChildren(dir)
-        val listChildrenElapsed = System.currentTimeMillis() - listChildrenStart
-        if (listChildrenElapsed > 300 && onBinderCooldown != null) {
-            for (sec in 5 downTo 1) {
-                if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-                onBinderCooldown(sec)
-                delay(1000)
-            }
-            onBinderCooldown(0)
-        }
-        if (result != null) break
-        if (list == null) { result = SizeCalcResult.PermissionDenied(dir); break }
-        children[dir] = list
-        scanned++
-        onScanned(scanned, dir)
-        for (e in list) {
+
+    val outcome = accessor.scanTree(normalizedRoot, cancelFlag) { batch ->
+        for (e in batch) {
+            // 绝对路径的父目录；根为 "/" 时子项（如 "/data"）的父应为 "/"
+            val parentRaw = e.path.substringBeforeLast('/', "")
+            val parent = if (parentRaw.isEmpty()) "/" else parentRaw
             if (e.isDir) {
+                allDirs.add(e.path)
                 dirMtimes[e.path] = e.mtime
-                depth[e.path] = d + 1
-                queue.add(e.path to d + 1)
-            }
-        }
-    }
-
-    // ── 2. 构建内存 B：从 DB 查缓存 ──
-    // memA: 目录路径 → 最新计算的 size（初始为 0）
-    // memB: 目录路径 → 缓存的 FolderSizeInfo（无缓存则为 null）
-    val memA = HashMap<String, Long>(children.size)
-    val memB = HashMap<String, FolderSizeInfo?>(children.size)
-    for (path in children.keys) {
-        memA[path] = 0L
-        memB[path] = db.get(path)
-    }
-
-    // ── 3. 从叶子向根逐层处理 ──
-    val ordered = children.keys.sortedByDescending { depth[it] ?: 0 }
-    val total = ordered.size
-    val updates = HashMap<String, FolderSizeInfo>(total)
-
-    try {
-        var processed = 0
-        for (dir in ordered) {
-            if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-            val currentMtime = dirMtimes[dir] ?: 0L
-            val cached = memB[dir]
-
-            if (cached != null && cached.lastModified == currentMtime) {
-                // 缓存命中：mtime 未变，复用旧 size
-                memA[dir] = cached.size
-                updates[dir] = cached
-            } else {
-                // 缓存未命中：列出直接子项，累加大小
-                val list = children[dir] ?: emptyList()
-                var sum = 0L
-                for (e in list) {
-                    sum += if (e.isDir) {
-                        // 子文件夹：从 A 读取（叶子已先处理，值已就绪）
-                        memA[e.path] ?: 0L
-                    } else {
-                        // 直接子文件：累加大小
-                        e.size
-                    }
+                if (parent != e.path) {
+                    dirChildren.getOrPut(parent) { ArrayList() }.add(e.path)
                 }
-                memA[dir] = sum
-                updates[dir] = FolderSizeInfo(sum, currentMtime)
+            } else {
+                fileSizes[e.path] = e.size
+                fileMtimes[e.path] = e.mtime
+                dirFileSum[parent] = (dirFileSum[parent] ?: 0L) + e.size
+                dirFiles.getOrPut(parent) { ArrayList() }.add(e.path to e.size)
             }
-            processed++
-            onProgress(processed, total, dir)
+            scanned++
         }
-    } catch (e: Throwable) {
-        // 异常：保存已计算的部分结果（不清除旧缓存，保留未处理目录的数据）
-        db.bulkPut(updates)
-        throw e
+        if (batch.isNotEmpty()) onScanned(scanned, batch.last().path)
     }
 
-    if (result == null) {
-        // 完整完成：先清除旧子树缓存（含已删除目录），再写入新数据
-        db.removeDescendants(rootPath)
-        db.bulkPut(updates)
-    } else {
-        // 部分完成（Cancelled / PermissionDenied）：只写新数据，不清除旧缓存
-        db.bulkPut(updates)
+    if (isCancelled()) return SizeCalcResult.Cancelled
+    when (outcome) {
+        ScanOutcome.Cancelled -> return SizeCalcResult.Cancelled
+        is ScanOutcome.Failed -> return SizeCalcResult.Failed(outcome.message)
+        else -> Unit
     }
 
-    val tree = if (result == null) buildSizeTree(rootPath, children, memA) else null
-    return result ?: SizeCalcResult.Success(memA[rootPath] ?: 0L, tree)
+    // 自底向上求和：路径越长越深，先算子目录再算父目录
+    val dirSize = HashMap<String, Long>(allDirs.size)
+    for (dir in allDirs.sortedByDescending { it.length }) {
+        var sum = dirFileSum[dir] ?: 0L
+        dirChildren[dir]?.let { for (child in it) sum += dirSize[child] ?: 0L }
+        dirSize[dir] = sum
+    }
+
+    // 完整快照：文件 + 目录的最终 (size, mtime)
+    val updates = HashMap<String, FolderSizeInfo>(fileSizes.size + dirSize.size)
+    for ((path, size) in fileSizes) {
+        updates[path] = FolderSizeInfo(size, fileMtimes[path] ?: 0L)
+    }
+    for ((path, size) in dirSize) {
+        updates[path] = FolderSizeInfo(size, dirMtimes[path] ?: 0L)
+    }
+    cache.bulkPut(updates)
+
+    val fullSnapshot = outcome is ScanOutcome.Success
+    val tree = buildSizeTree(normalizedRoot, allDirs, dirChildren, dirFiles, dirSize)
+    // 根若是普通文件（无子目录），直接返回其文件大小
+    val rootSize = dirSize[normalizedRoot] ?: fileSizes[normalizedRoot] ?: 0L
+    return SizeCalcResult.Success(
+        rootSize = rootSize,
+        tree = tree,
+        fullSnapshot = fullSnapshot
+    )
 }
 
-/**
- * 基于 BFS 收集的 children 和 sizes 构建树形结构。
- * children 中的条目按大小降序排列。
- */
+/** 基于扫描结果构建树形结构，子项按大小降序。 */
 private fun buildSizeTree(
     rootPath: String,
-    children: Map<String, List<DirEntry>>,
-    sizes: Map<String, Long>
-): SizeTreeNode {
-    val rootName = rootPath.substringAfterLast('/').ifEmpty { "/" }
-    val rootSize = sizes[rootPath] ?: 0L
-    val list = children[rootPath] ?: emptyList()
-    val childNodes = list.map { e ->
-        if (e.isDir) buildSizeTree(e.path, children, sizes)
-        else SizeTreeNode(e.name, e.path, false, e.size)
-    }.sortedByDescending { it.size }
-    return SizeTreeNode(rootName, rootPath, true, rootSize, childNodes)
+    dirs: Set<String>,
+    dirChildren: Map<String, List<String>>,
+    dirFiles: Map<String, List<Pair<String, Long>>>,
+    dirSize: Map<String, Long>
+): SizeTreeNode? {
+    if (rootPath !in dirs) return null
+    fun build(path: String): SizeTreeNode {
+        val name = path.substringAfterLast('/').ifEmpty { "/" }
+        val childNodes = ArrayList<SizeTreeNode>()
+        for (child in dirChildren[path] ?: emptyList()) {
+            childNodes.add(build(child))
+        }
+        for ((filePath, size) in dirFiles[path] ?: emptyList()) {
+            childNodes.add(SizeTreeNode(filePath.substringAfterLast('/'), filePath, false, size))
+        }
+        return SizeTreeNode(name, path, true, dirSize[path] ?: 0L, childNodes.sortedByDescending { it.size })
+    }
+    return build(rootPath)
 }

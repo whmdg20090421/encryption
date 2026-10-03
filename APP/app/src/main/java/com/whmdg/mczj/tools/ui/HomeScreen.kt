@@ -387,48 +387,20 @@ fun MainAppContainer() {
         ) {
             Column {
                 if (calcIsCalculating && calcStatus != null) {
-                    // 阶段一：正在统计文件夹数量（find 执行中）
+                    // 阶段一：正在扫描（find 执行中）
                     Text(
                         text = calcStatus!!,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 } else if (calcIsCalculating) {
-                    // 阶段二：进度条显示
-                    val calcProgress = SizeCalcManager.progress
+                    // 阶段二：已扫描数量（单命令扫描无法预知总数）
                     val calcScanned = SizeCalcManager.scannedCount
-                    val calcTotal = SizeCalcManager.totalCount
-                    val cooldownSec = SizeCalcManager.binderCooldownSeconds
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LinearProgressIndicator(
-                            progress = { calcProgress },
-                            modifier = Modifier.weight(1f).height(6.dp),
-                            trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            "${(calcProgress * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    if (cooldownSec > 0) {
-                        Text(
-                            text = "Binder 队列过长，等待 ${cooldownSec} 秒...",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    } else {
-                        Text(
-                            text = "已扫描 $calcScanned / $calcTotal 个目录  ${(calcProgress * 100).toInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = "已扫描 $calcScanned 个条目",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 // 取消/保存按钮
                 Spacer(Modifier.height(4.dp))

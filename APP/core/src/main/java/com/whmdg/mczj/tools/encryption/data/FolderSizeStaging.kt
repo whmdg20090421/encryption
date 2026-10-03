@@ -8,15 +8,16 @@ package com.whmdg.mczj.tools.encryption.data
  * [FolderSizeStore.commitStaging] 一次性提交；用户选择「丢弃」/取消时直接丢弃本对象，
  * 存储不受影响。以此保留「统计中不落盘、由用户确认」的原有语义。
  *
- * 读取时先看暂存、再看底层存储，保证统计过程中的读-改-写一致。
+ * 暂存区记录本次统计的根路径，并保存「扫描产出的全部路径」，供提交层与库中旧记录
+ * 做差集、删除已消失的条目。
  */
 class FolderSizeStaging private constructor(
-    private val readBase: (String) -> FolderSizeInfo?
+    val rootPath: String
 ) : FolderSizeCache {
 
     companion object {
-        /** 基于存储门面创建暂存区。 */
-        fun create(): FolderSizeStaging = FolderSizeStaging { path -> FolderSizeStore.peek(path) }
+        /** 创建暂存区。 */
+        fun create(rootPath: String): FolderSizeStaging = FolderSizeStaging(rootPath)
     }
 
     private fun normalize(path: String): String = path.trimEnd('/')
@@ -24,41 +25,19 @@ class FolderSizeStaging private constructor(
     /** 暂存的写入（路径已归一化）。 */
     private val staged = LinkedHashMap<String, FolderSizeInfo>()
 
-    /** 暂存的子树删除请求。 */
-    private val removed = LinkedHashSet<String>()
-
     private val lock = Any()
-
-    override fun get(path: String): FolderSizeInfo? {
-        val key = normalize(path)
-        synchronized(lock) {
-            staged[key]?.let { return it }
-        }
-        return readBase(key)
-    }
 
     override fun bulkPut(updates: Map<String, FolderSizeInfo>) {
         synchronized(lock) {
             for ((path, info) in updates) {
-                val key = normalize(path)
-                staged[key] = info
-                removed.remove(key)
+                staged[normalize(path)] = info
             }
         }
     }
 
-    override fun removeDescendants(path: String) {
-        val key = normalize(path)
-        val prefix = "$key/"
-        synchronized(lock) {
-            staged.keys.removeAll { it == key || it.startsWith(prefix) }
-            removed.add(key)
-        }
-    }
-
-    /** 提交用：暂存的写入快照。 */
+    /** 提交用：暂存的写入快照（已归一化路径）。 */
     fun stagedSnapshot(): Map<String, FolderSizeInfo> = synchronized(lock) { LinkedHashMap(staged) }
 
-    /** 提交用：暂存的删除快照。 */
-    fun removedSnapshot(): List<String> = synchronized(lock) { ArrayList(removed) }
+    /** 提交用：本次扫描实际产出的全部路径集合。 */
+    fun scannedPaths(): Set<String> = synchronized(lock) { staged.keys.toHashSet() }
 }

@@ -23,8 +23,16 @@ data class DirEntry(
 
 /** 文件夹大小统计的结果。 */
 sealed class SizeCalcResult {
-    data class Success(val rootSize: Long, val tree: com.whmdg.mczj.tools.util.SizeTreeNode? = null) : SizeCalcResult()
-    data class PermissionDenied(val path: String) : SizeCalcResult()
+    /**
+     * 统计成功。
+     * @param fullSnapshot true = 整棵子树扫描完整（可用于删除消失项）；
+     *   false = 部分成功（存在不可读子目录，只能合并写入、不删旧记录）。
+     */
+    data class Success(
+        val rootSize: Long,
+        val tree: com.whmdg.mczj.tools.util.SizeTreeNode? = null,
+        val fullSnapshot: Boolean = false
+    ) : SizeCalcResult()
     object Cancelled : SizeCalcResult()
     data class Failed(val reason: String) : SizeCalcResult()
 }
